@@ -1,0 +1,16 @@
+.DS_Store
+build/
+erl_crash.dump
+*.ez
+node_modules/
+clients/web/test-results/
+clients/web/playwright-report/
+.env
+clients/ios/.build/
+clients/ios/.swiftpm/
+clients/ios/*.xcodeproj/
+DerivedData/
+out/
+clients/android/.gradle/
+clients/android/local.properties
+.kotlin/

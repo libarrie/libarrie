@@ -1,0 +1,12 @@
+**/build
+**/node_modules
+**/test-results
+**/playwright-report
+**/.DS_Store
+.git
+.jj
+assets
+docs
+**/.gradle
+**/.kotlin
+out
