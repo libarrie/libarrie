@@ -1,0 +1,19 @@
+name = "libarrie_domain"
+version = "0.1.0"
+description = "Libarrie core domain operations: notebooks, pages, uploads, quotas, search"
+licences = ["Apache-2.0"]
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+gleam_crypto = ">= 1.6.0 and < 2.0.0"
+gleam_json = ">= 3.1.0 and < 4.0.0"
+gleam_time = ">= 1.11.0 and < 2.0.0"
+pog = ">= 4.1.0 and < 5.0.0"
+youid = ">= 1.6.0 and < 2.0.0"
+envoy = ">= 1.0.0 and < 2.0.0"
+libarrie_database = { path = "../database" }
+libarrie_jobs = { path = "../jobs" }
+libarrie_integrations = { path = "../integrations" }
+
+[dev_dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"

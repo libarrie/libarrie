@@ -1,0 +1,22 @@
+name = "libarrie_mcp"
+version = "0.1.0"
+description = "Libarrie MCP server: search and read notes from an agent"
+licences = ["Apache-2.0"]
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+gleam_crypto = ">= 1.6.0 and < 2.0.0"
+gleam_http = ">= 4.5.0 and < 5.0.0"
+gleam_json = ">= 3.1.0 and < 4.0.0"
+gleam_time = ">= 1.11.0 and < 2.0.0"
+mist = ">= 6.0.0 and < 7.0.0"
+youid = ">= 1.6.0 and < 2.0.0"
+gleam_mcp = { git = "https://github.com/thedadams/gleam-mcp.git", ref = "f8c429c7362aa5dbcb86cda816633dd00e1da414" }
+# Shared session store, so any API replica can serve any MCP session.
+gleam_mcp_postgres = { git = "https://github.com/thedadams/gleam-mcp.git", ref = "f8c429c7362aa5dbcb86cda816633dd00e1da414", path = "adapters/postgres" }
+libarrie_database = { path = "../database" }
+libarrie_integrations = { path = "../integrations" }
+libarrie_domain = { path = "../domain" }
+
+[dev_dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"
