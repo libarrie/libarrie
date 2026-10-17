@@ -1,0 +1,13 @@
+{
+  "name": "libarrie-web-tests",
+  "private": true,
+  "description": "Browser tests for the Libarrie htmx web UI (development only; nothing here ships)",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.64.0"
+  }
+}
