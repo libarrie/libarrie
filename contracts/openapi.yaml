@@ -1,0 +1,532 @@
+openapi: 3.1.0
+info:
+  title: Libarrie Core API
+  version: 0.1.0
+  description: |
+    Versioned JSON API shared by native clients and the browser upload module
+    (DESIGN.md section 11). UUIDs are opaque; timestamps are UTC RFC 3339.
+    Unknown additive response fields must not break clients.
+
+    Errors use `{"error":{"code","message","details","request_id"}}`.
+    Stable codes include authentication_required, forbidden, not_found,
+    version_conflict, precondition_required, page_number_conflict,
+    storage_limit_reached, processing_limit_reached, unsupported_image,
+    upload_expired, upload_missing, upload_changed, rate_limited,
+    provider_unavailable, processing_conflict, operation_terminal,
+    no_text_detected, unreadable, restore_conflict, account_closing,
+    recovery_pending, operational_limit_reached, reauthentication_required,
+    deferred_replacement_unsupported, cleanup_pending, recovery_hold_expired,
+    idempotency_conflict, notebook_limit_reached, account_closed,
+    account_exists, acknowledgement_required, closure_already_scheduled,
+    closure_not_scheduled, export_exceeds_closure_window, export_unavailable,
+    active_source.
+
+    Rate-limited requests return 429 with Retry-After. Account deletion,
+    closure cancellation and permanent purge require a sign-in no older than
+    five minutes (401 reauthentication_required otherwise).
+
+    Resource edits use ETags: attribution edits match `"v{version}"`,
+    transcript/reprocess/replacement match `"c{content_version}"`, and
+    whole-notebook renumber plans may match `"n{numbering_revision}"`.
+servers:
+  - url: http://localhost:8080
+security:
+  - bearer: []
+  - session: []
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: OIDC access token. Native clients send no cookies; a request with both a bearer token and a session cookie is rejected with 400.
+    session:
+      type: apiKey
+      in: cookie
+      name: __Host-libarrie_session
+      description: "Same-origin browser session. Non-GET requests also require `X-CSRF-Token` and a matching `Origin` (or `Sec-Fetch-Site: same-origin`)."
+    internal:
+      type: http
+      scheme: bearer
+      description: Internal entitlement-authority credential; cannot read notes.
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    IfMatch:
+      name: If-Match
+      in: header
+      schema: {type: string}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: {type: string}
+    Cursor:
+      name: cursor
+      in: query
+      schema: {type: string}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, details, request_id]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            details: {type: object}
+            request_id: {type: string}
+    Limit:
+      oneOf:
+        - type: object
+          required: [kind, value]
+          properties:
+            kind: {const: limited}
+            value: {type: integer, minimum: 0}
+        - type: object
+          required: [kind]
+          properties:
+            kind: {const: unlimited}
+    Notebook:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        description: {type: string}
+        color: {type: [string, "null"], pattern: "^#[0-9A-Fa-f]{6}$"}
+        version: {type: integer}
+        numbering_revision: {type: integer}
+        page_count: {type: integer}
+        deleted_at: {type: [string, "null"], format: date-time}
+        deletion_batch_id: {type: [string, "null"], format: uuid}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    NotebookInput:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        description: {type: string, maxLength: 2000}
+        color: {type: string, pattern: "^(#[0-9A-Fa-f]{6})?$", description: "#RRGGBB; an empty string clears the color"}
+    Page:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        notebook: {type: object, properties: {id: {type: string}, name: {type: string}}}
+        page_number: {type: integer, minimum: 1}
+        visibility: {enum: [active, restore_pending, trashed]}
+        version: {type: integer}
+        content_version: {type: integer}
+        revision_id: {type: [string, "null"]}
+        pending_revision_id: {type: [string, "null"]}
+        transcript_revision_id: {type: [string, "null"]}
+        index_generation_id: {type: [string, "null"]}
+        processing_status:
+          type: string
+          description: awaiting_processing, a live operation status (queued, recognizing, indexing) or the source status (ready, ready_empty, needs_user_action, failed, cancelled).
+        indexing_pending: {type: boolean}
+        live_operation_id: {type: [string, "null"]}
+        backup_status: {type: [string, "null"], enum: [pending, verified, missing, null]}
+        deleted_at: {type: [string, "null"]}
+        deletion_batch_id: {type: [string, "null"]}
+        created_at: {type: string}
+        updated_at: {type: string}
+        thumbnail_url: {type: [string, "null"], description: "Same-origin /img route; null until derived images exist"}
+        preview_url: {type: [string, "null"]}
+    Operation:
+      type: object
+      properties:
+        operation_id: {type: string, format: uuid}
+        kind: {enum: [upload, replacement, reprocess, deferred_processing]}
+        status:
+          enum: [awaiting_upload, validating, queued, recognizing, indexing, accepted, ready, ready_empty, needs_user_action, failed, cancelled, superseded, deleted, expired]
+        failure_fault: {type: [string, "null"], enum: [user, system, null]}
+        error_code: {type: [string, "null"]}
+        client_label: {type: string}
+        notebook_id: {type: [string, "null"]}
+        page_id: {type: [string, "null"]}
+        revision_id: {type: [string, "null"]}
+        processing_mode: {enum: [immediate, deferred]}
+        upload_accepted_at: {type: [string, "null"]}
+        parent_operation_id: {type: [string, "null"]}
+        charge_root_operation_id: {type: string}
+        created_at: {type: string}
+        updated_at: {type: string}
+    UploadSession:
+      type: object
+      properties:
+        upload_session_id: {type: string, format: uuid}
+        status: {type: string}
+        expires_at: {type: string, format: date-time}
+        upload:
+          type: [object, "null"]
+          description: Present while the reservation accepts bytes. Send exactly these headers plus Content-Length.
+          properties:
+            method: {const: PUT}
+            url: {type: string}
+            headers: {type: object, additionalProperties: {type: string}}
+            expires_in_seconds: {type: integer}
+        constraints: {type: object}
+        operation: {$ref: "#/components/schemas/Operation"}
+    LifecycleAccepted:
+      type: object
+      description: 202 response; `status` stays recovery_pending until the independent journal acknowledges the intent.
+      properties:
+        status: {const: recovery_pending}
+        journal:
+          type: object
+          properties:
+            command_id: {type: string}
+            journal_status: {type: string}
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+paths:
+  /healthz:
+    get:
+      security: []
+      summary: Liveness
+      responses: {"200": {description: OK}}
+  /readyz:
+    get:
+      security: []
+      summary: Readiness (database and schema)
+      responses: {"200": {description: Ready}, "503": {$ref: "#/components/responses/Error"}}
+  /img/{object_id}/{variant}:
+    parameters:
+      - {name: object_id, in: path, required: true, schema: {type: string, format: uuid}, description: Source image object ID}
+      - {name: variant, in: path, required: true, schema: {enum: [thumb, preview]}}
+    get:
+      summary: Thumbnail (320 px) or preview (1,600 px) JPEG, authorized per request
+      description: Streams bytes with Cache-Control private, max-age=86400; never redirects to a signed URL.
+      responses:
+        "200": {description: JPEG, content: {image/jpeg: {}}}
+        "404": {$ref: "#/components/responses/Error"}
+  /v1/client-configuration:
+    get:
+      security: []
+      summary: What a native app needs from only the server URL
+      description: "Unauthenticated. `oidc` (issuer, authorization and token endpoints, the native public client_id, its custom-scheme redirect_uri and scopes) is null until a native client is configured. `uploads.integrity` is sha256 or md5 (send checksum_md5 when md5)."
+      responses: {"200": {description: Configuration}}
+  /v1/me:
+    get:
+      summary: Identity, account and client-safe capabilities
+      responses: {"200": {description: OK}, default: {$ref: "#/components/responses/Error"}}
+  /v1/settings:
+    get:
+      summary: Account preferences
+      responses: {"200": {description: "auto_process_deferred"}}
+    put:
+      summary: Change account preferences
+      description: "auto_process_deferred (default false): admit pages uploaded for later processing automatically, as capacity allows, through the same contract as process-deferred."
+      requestBody:
+        content: {application/json: {schema: {type: object, properties: {auto_process_deferred: {type: boolean}}}}}
+      responses: {"200": {description: Updated preferences}}
+  /v1/usage:
+    get:
+      summary: Limits, usage, coverage, lifetime allowance, credits and recovery holds
+      responses: {"200": {description: OK}, default: {$ref: "#/components/responses/Error"}}
+  /v1/notebooks:
+    get:
+      parameters: [{$ref: "#/components/parameters/Cursor"}, {$ref: "#/components/parameters/Limit"}]
+      responses: {"200": {description: Notebooks and next_cursor}}
+    post:
+      parameters: [{$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        content: {application/json: {schema: {$ref: "#/components/schemas/NotebookInput"}}}
+      responses:
+        "201": {description: Created, content: {application/json: {schema: {$ref: "#/components/schemas/Notebook"}}}}
+        default: {$ref: "#/components/responses/Error"}
+  /v1/notebooks/{id}:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    get:
+      responses: {"200": {description: Notebook with ETag}}
+    patch:
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      requestBody:
+        content: {application/json: {schema: {$ref: "#/components/schemas/NotebookInput"}}}
+      responses: {"200": {description: Updated}, "412": {$ref: "#/components/responses/Error"}, "428": {$ref: "#/components/responses/Error"}}
+    delete:
+      summary: Trash the notebook and its active children under one deletion batch
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      responses: {"202": {description: Trashed, content: {application/json: {schema: {$ref: "#/components/schemas/LifecycleAccepted"}}}}}
+  /v1/notebooks/{id}/restore:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    post:
+      summary: Atomic restore of the notebook and selected batch children
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                page_ids: {type: array, items: {type: string}}
+                page_numbers:
+                  type: array
+                  items: {type: object, properties: {page_id: {type: string}, page_number: {type: integer}}}
+      responses: {"202": {description: Restore claimed}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/notebooks/{id}/pages:
+    parameters: [{$ref: "#/components/parameters/Id"}, {$ref: "#/components/parameters/Cursor"}, {$ref: "#/components/parameters/Limit"}]
+    get:
+      summary: Active pages ordered by page number (cursor is the last page number)
+      responses: {"200": {description: OK}}
+  /v1/notebooks/{id}/renumber:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    get:
+      responses: {"200": {description: "Numbering representation with ETag n{numbering_revision}"}}
+    post:
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [shift]
+                  properties:
+                    shift: {type: object, required: [from, to, by], properties: {from: {type: integer}, to: {type: integer}, by: {type: integer}}}
+                - type: object
+                  required: [mapping]
+                  properties:
+                    mapping:
+                      type: array
+                      items: {type: object, required: [page_id, page_number, version], properties: {page_id: {type: string}, page_number: {type: integer}, version: {type: integer}}}
+      responses:
+        "200": {description: Moved pages and new numbering_revision}
+        "409": {$ref: "#/components/responses/Error"}
+        "412": {$ref: "#/components/responses/Error"}
+  /v1/trash:
+    get:
+      parameters: [{$ref: "#/components/parameters/Cursor"}, {$ref: "#/components/parameters/Limit"}]
+      responses: {"200": {description: Trashed notebooks and pages}}
+  /v1/pages/{id}:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    get:
+      summary: Page detail with selected transcript, OCR candidate and latest operation
+      responses: {"200": {description: OK}}
+    patch:
+      summary: Renumber or move (If-Match on version)
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      requestBody:
+        content: {application/json: {schema: {type: object, properties: {page_number: {type: integer}, notebook_id: {type: string}}}}}
+      responses: {"200": {description: Updated}, "409": {$ref: "#/components/responses/Error"}, "412": {$ref: "#/components/responses/Error"}}
+    delete:
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      responses: {"202": {description: Trashed, content: {application/json: {schema: {$ref: "#/components/schemas/LifecycleAccepted"}}}}}
+  /v1/pages/{id}/restore:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    post:
+      requestBody:
+        content: {application/json: {schema: {type: object, properties: {notebook_id: {type: string}, page_number: {type: integer}}}}}
+      responses: {"202": {description: Restore claimed}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/pages/{id}/transcript:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    put:
+      summary: Save a correction, accept an OCR candidate or confirm blank (If-Match on content_version)
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source_revision_id]
+              properties:
+                source_revision_id: {type: string}
+                base_transcript_revision_id: {type: string}
+                action: {enum: [save, accept_candidate, confirm_blank], default: save}
+                text: {type: string}
+                ocr_result_id: {type: string}
+      responses: {"200": {description: Saved}, "409": {$ref: "#/components/responses/Error"}, "412": {$ref: "#/components/responses/Error"}}
+  /v1/pages/{id}/reprocess:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    post:
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      requestBody:
+        content: {application/json: {schema: {type: object, required: [operation_id, source_revision_id], properties: {operation_id: {type: string}, source_revision_id: {type: string}}}}}
+      responses: {"202": {description: Operation admitted}}
+  /v1/pages/{id}/image-url:
+    parameters: [{$ref: "#/components/parameters/Id"}, {name: revision_id, in: query, schema: {type: string}}]
+    get:
+      summary: Five-minute signed URL for the original image (bearer URL; residual access until expiry)
+      responses: {"200": {description: Signed URL}}
+  /v1/pages/awaiting-processing:
+    get:
+      summary: Up to 100 active pages uploaded with deferred processing that still wait for it, in notebook/page order
+      responses: {"200": {description: "Pages (with revision_id for process-deferred)"}}
+  /v1/pages/process-deferred:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 100
+                  items: {type: object, required: [page_id, source_revision_id, operation_id], properties: {page_id: {type: string}, source_revision_id: {type: string}, operation_id: {type: string}}}
+      responses: {"200": {description: "Per-item admitted, already_admitted, conflict or limit in notebook/page/ID order"}}
+  /v1/trash/purge:
+    post:
+      summary: Permanently delete selected trash or all of it (recent authentication)
+      description: Targets are hidden at once and erased after the independent journal acknowledges the purge. Exports pinning affected artifacts are invalidated. Independent backups age out on their own window.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                page_ids: {type: array, items: {type: string}}
+                notebook_ids: {type: array, items: {type: string}}
+                all: {type: boolean}
+      responses: {"202": {description: Purge recorded}, "401": {$ref: "#/components/responses/Error"}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/pages/{id}/revisions/{revision_id}:
+    parameters: [{$ref: "#/components/parameters/Id"}, {name: revision_id, in: path, required: true, schema: {type: string}}]
+    delete:
+      summary: Permanently purge a non-active source revision and its derived data (recent authentication)
+      responses: {"202": {description: Purge recorded}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/exports:
+    get:
+      responses: {"200": {description: Recent exports}}
+    post:
+      summary: Start an export (snapshot taken at admission)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notebook_ids: {type: array, items: {type: string}}
+                include_trash: {type: boolean, default: false}
+      responses:
+        "202": {description: Export admitted}
+        "409": {$ref: "#/components/responses/Error"}
+  /v1/exports/{id}:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    get:
+      summary: Export state (assembling, completed, failed, expired, cancelled, invalidated) and parts
+      responses: {"200": {description: OK}}
+  /v1/exports/{id}/parts/{n}/download-url:
+    parameters: [{$ref: "#/components/parameters/Id"}, {name: n, in: path, required: true, schema: {type: integer}}]
+    get:
+      summary: Five-minute signed URL for one ZIP64 part; reissuable while retained, supports range requests
+      responses: {"200": {description: Signed URL}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/account-deletion:
+    get:
+      summary: Minimal lifecycle and delivery status (also available to status-only sessions)
+      responses: {"200": {description: Status}}
+    post:
+      summary: Schedule closure after the grace period (recent authentication)
+      requestBody:
+        content: {application/json: {schema: {type: object, properties: {acknowledge_coverage_end: {type: boolean}}}}}
+      responses: {"202": {description: Scheduled}, "409": {$ref: "#/components/responses/Error"}}
+    delete:
+      summary: Cancel scheduled closure before its effective time (If-Match lifecycle revision, recent authentication)
+      parameters: [{$ref: "#/components/parameters/IfMatch"}]
+      responses: {"202": {description: Cancellation recorded}, "409": {$ref: "#/components/responses/Error"}, "412": {$ref: "#/components/responses/Error"}}
+  /v1/accounts:
+    post:
+      summary: Explicitly create a new account for an identity whose account was purged
+      description: The new account inherits the identity's prior lifetime-allowance usage.
+      responses: {"201": {description: Created}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/upload-sessions:
+    post:
+      summary: Reserve capacity and initialize a new-page or replacement upload
+      description: The operation UUID is the durable deduplication key. Replacements require If-Match on content_version and reject processing_mode deferred.
+      parameters: [{$ref: "#/components/parameters/IfMatch"}, {$ref: "#/components/parameters/IdempotencyKey"}]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [operation_id, bytes, content_type, checksum_sha256]
+              properties:
+                operation_id: {type: string, format: uuid}
+                notebook_id: {type: string}
+                page_number: {type: integer}
+                page_id: {type: string, description: Replacement target}
+                bytes: {type: integer}
+                content_type: {enum: [image/jpeg, image/png]}
+                checksum_sha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+                checksum_md5: {type: string, pattern: "^[0-9a-f]{32}$", description: "Required when the deployment's object store verifies Content-MD5 (Cloudflare R2); the presigned upload then includes a content-md5 header"}
+                processing_mode: {enum: [immediate, deferred], default: immediate}
+                client_label: {type: string}
+                transfer: {enum: [foreground, background], default: foreground}
+                retry_of_operation_id: {type: string}
+      responses:
+        "201": {description: Created, content: {application/json: {schema: {$ref: "#/components/schemas/UploadSession"}}}}
+        "200": {description: Replay of the same operation}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/upload-sessions/{id}:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    get:
+      responses: {"200": {description: Session status}}
+  /v1/upload-sessions/{id}/refresh:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    post:
+      requestBody:
+        content: {application/json: {schema: {type: object, properties: {transfer: {enum: [foreground, background]}}}}}
+      responses: {"200": {description: "New URL, same reservation"}}
+  /v1/upload-sessions/{id}/complete:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    post:
+      summary: Freeze, validate and accept the uploaded bytes (idempotent)
+      responses: {"200": {description: Accepted operation}, "409": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}}
+  /v1/operations/{id}:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    get:
+      responses: {"200": {description: Operation, content: {application/json: {schema: {$ref: "#/components/schemas/Operation"}}}}}
+  /v1/operations/{id}/cancel:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    post:
+      responses: {"200": {description: Cancelled or existing terminal outcome}}
+  /v1/search:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: {type: string, maxLength: 500}
+                notebook_id: {type: string}
+                limit: {type: integer, minimum: 1, maximum: 50, default: 10}
+      responses:
+        "200":
+          description: "One result per page; search_mode is hybrid or lexical_only; index_migration_pending is true while an embedding-model migration is reindexing this account"
+  /internal/v1/accounts/{id}/entitlements:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    put:
+      security: [{internal: []}]
+      description: Full desired-state projection; see contracts/entitlements/.
+      responses: {"200": {description: Acknowledgement}, "409": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}}
+  /internal/v1/accounts/{id}/credit-grants:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    post:
+      security: [{internal: []}]
+      requestBody:
+        content: {application/json: {schema: {type: object, required: [external_grant_id], properties: {external_grant_id: {type: string}, action: {enum: [grant, revoke]}, units: {type: integer}, expires_at: {type: string}}}}}
+      responses: {"200": {description: Grant state}}
+  /internal/v1/accounts/{id}/entitlement-status:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    get:
+      security: [{internal: []}]
+      responses: {"200": {description: Applied revision per authority}}
+  /internal/v1/accounts/{id}/lifecycle-status:
+    parameters: [{$ref: "#/components/parameters/Id"}]
+    get:
+      security: [{internal: []}]
+      responses: {"200": {description: Lifecycle status only; no note data}}

@@ -1,0 +1,1 @@
+{"status":200,"body":"{\"user\":{\"id\":\"01a14563-141f-7eaf-b9d8-f112d334b30f\",\"display_name\":\"Test User\"},\"account\":{\"id\":\"01a14563-141f-74b1-b7e9-71f98beda7dc\",\"status\":\"active\"},\"capabilities\":{\"deferred_processing\":true,\"background_upload_urls\":true}}"}

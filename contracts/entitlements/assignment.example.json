@@ -1,0 +1,29 @@
+{
+  "command_id": "6f1c2a52-7f3e-4f7e-9b57-0f0d7a0c1a11",
+  "authority": "example-authority",
+  "revision": 17,
+  "effective_at": "2026-11-01T00:00:00Z",
+  "limits": {
+    "stored_pages": {"kind": "limited", "value": 10000},
+    "notebooks": {"kind": "unlimited"},
+    "processing_pages_per_period": {"kind": "limited", "value": 300}
+  },
+  "processing_policy": {
+    "kind": "calendar_months_from_anchor",
+    "schedule_id": "0b7a3c1e-8f0c-4c9a-9a51-6a1d1f0c9e11",
+    "anchor": "2026-11-01T00:00:00Z",
+    "timezone": "UTC"
+  },
+  "processing_coverage": [{
+    "coverage_id": "3c6c1f0e-2a4b-4d8e-8f1a-9e2b7c5d4a10",
+    "kind": "base",
+    "starts_at": "2026-11-01T00:00:00Z",
+    "ends_at": "2026-12-01T00:00:00Z",
+    "authorized_units": 300,
+    "confirmation_state": "confirmed"
+  }],
+  "coverage_revocations": [],
+  "renewal_policy": {"kind": "disabled"},
+  "features": {},
+  "scheduled_change": null
+}
