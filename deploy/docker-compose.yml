@@ -1,0 +1,33 @@
+# Development stack only (DESIGN.md section 15). Stock upstream images are
+# referenced, not rebuilt or redistributed. The object store is SeaweedFS
+# (Apache-2.0); MinIO and Garage are AGPL and excluded.
+name: libarrie-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: libarrie
+      POSTGRES_PASSWORD: libarrie
+      POSTGRES_DB: libarrie
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "libarrie"]
+      interval: 2s
+      retries: 30
+
+  objectstore:
+    image: chrislusf/seaweedfs:latest
+    command: server -dir=/data -ip.bind=0.0.0.0 -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=64
+    ports:
+      - "8333:8333"
+    volumes:
+      - ./dev/s3.json:/etc/seaweedfs/s3.json:ro
+      - objdata:/data
+
+volumes:
+  pgdata:
+  objdata:

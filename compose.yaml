@@ -1,0 +1,100 @@
+# Full local stack for trying Libarrie end to end:
+#   docker compose up --build
+# then open http://localhost:8080 and sign in with any name (development
+# issuer). Uses mock OCR and embeddings unless you set real providers in a
+# `.env` file next to this one (see the README). Data persists in named
+# volumes; `docker compose down -v` deletes it.
+#
+# Development only: anyone who can reach it can sign in as anyone. Ports are
+# bound to 127.0.0.1; LIBARRIE_BIND opens them to your local network (for
+# testing the apps on a phone), never to the internet. To run Libarrie for
+# real, see docs/self-hosting.md.
+name: libarrie
+
+x-server-env: &server-env
+  DATABASE_URL: postgres://libarrie:libarrie@postgres:5432/libarrie
+  S3_ENDPOINT: http://objectstore:8333
+  # Browsers upload and download directly with presigned URLs.
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:8333}
+  S3_ACCESS_KEY_ID: libarrie-dev-access
+  S3_SECRET_ACCESS_KEY: libarrie-dev-secret
+  WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
+  OIDC_ISSUER: ${OIDC_ISSUER:-http://localhost:8080/dev-issuer}
+  DEV_ISSUER_SECRET: ${DEV_ISSUER_SECRET:-compose-dev-issuer-secret}
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:-compose-dev-secret-key-base-not-for-production-0123456789abcdef-0123456789}
+  INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-compose-internal-token}
+  PORT: "8080"
+  # The unprivileged tier (Landlock + seccomp + rlimits) needs no extra
+  # container privileges. Set DECODER_SANDBOX=none if your kernel lacks Landlock.
+  DECODER_SANDBOX: ${DECODER_SANDBOX:-unprivileged}
+  # Generous limits so you can try things without hitting the default limits.
+  DEFAULT_STORED_PAGES: ${DEFAULT_STORED_PAGES:-1000}
+  DEFAULT_NOTEBOOKS: ${DEFAULT_NOTEBOOKS:-unlimited}
+  DEFAULT_LIFETIME_PROCESSING: ${DEFAULT_LIFETIME_PROCESSING:-1000}
+  # Optional real providers (put keys in .env, never in this file).
+  OCR_PROVIDER: ${OCR_PROVIDER:-mock}
+  MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-mock}
+  VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: libarrie
+      POSTGRES_PASSWORD: libarrie
+      POSTGRES_DB: libarrie
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "libarrie"]
+      interval: 2s
+      retries: 30
+
+  objectstore:
+    image: chrislusf/seaweedfs:latest
+    command: server -dir=/data -ip.bind=0.0.0.0 -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=64
+    ports:
+      - "${LIBARRIE_BIND:-127.0.0.1}:8333:8333"
+    volumes:
+      - ./deploy/dev/s3.json:/etc/seaweedfs/s3.json:ro
+      - objdata:/data
+
+  migrate:
+    build: { context: ., dockerfile: server/Dockerfile }
+    image: libarrie-server:dev
+    command: ["/app/api/entrypoint.sh", "run", "migrate"]
+    environment: *server-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  worker:
+    image: libarrie-server:dev
+    command: ["/app/worker/entrypoint.sh", "run"]
+    environment: *server-env
+    tmpfs:
+      - /tmp:uid=10001,gid=10001
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      objectstore: { condition: service_started }
+    restart: unless-stopped
+
+  api:
+    image: libarrie-server:dev
+    command: ["/app/api/entrypoint.sh", "run", "serve"]
+    environment: *server-env
+    ports:
+      - "${LIBARRIE_BIND:-127.0.0.1}:8080:8080"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      objectstore: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      retries: 30
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  objdata:
