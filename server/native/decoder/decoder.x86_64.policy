@@ -1,0 +1,46 @@
+# Seccomp allowlist for the launcher and decoder (x86_64). The same set as
+# decoder.aarch64.policy, which was derived from strace and kernel audit
+# logs, translated to x86_64: legacy open/stat, arch_prctl, alarm and
+# setrlimit exist here, and musl's fork() uses the fork syscall instead of
+# clone. Verified on x86_64 by .github/workflows/decoder-x86_64.yml (both
+# sandbox tiers); anything else (network, ptrace, mount, ...) kills the
+# process. Process creation by the decoder is additionally prevented by
+# RLIMIT_NPROC=0 set in the launcher.
+read: 1
+readv: 1
+write: 1
+writev: 1
+open: 1
+openat: 1
+close: 1
+lseek: 1
+fstat: 1
+newfstatat: 1
+stat: 1
+mmap: 1
+munmap: 1
+mremap: 1
+madvise: 1
+brk: 1
+arch_prctl: 1
+set_tid_address: 1
+prlimit64: 1
+setrlimit: 1
+setitimer: 1
+alarm: 1
+execve: 1
+rt_sigreturn: 1
+rt_sigprocmask: 1
+exit: 1
+exit_group: 1
+# musl stdio probes stderr with TIOCGWINSZ only.
+ioctl: arg1 == 0x5413
+# minijail init and the launcher: plain fork only (no threads or namespace
+# flags), reaping and signal setup.
+fork: 1
+clone: arg0 == 0x11
+wait4: 1
+rt_sigaction: 1
+prctl: 1
+getpid: 1
+kill: 1

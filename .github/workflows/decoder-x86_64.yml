@@ -1,0 +1,32 @@
+# Runs the decoder sandbox tests on x86_64 hardware (GitHub's Linux runners),
+# where the x86_64 seccomp policy is enforced by a real kernel. The arm64
+# policy is verified locally (server/scripts/test-linux.sh on Apple silicon).
+name: decoder-x86_64
+
+on:
+  push:
+    paths: ["server/native/decoder/**", "server/packages/integrations/**", ".github/workflows/decoder-x86_64.yml"]
+  pull_request:
+    paths: ["server/native/decoder/**", "server/packages/integrations/**", ".github/workflows/decoder-x86_64.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the decoder and its tests
+        run: |
+          docker build -f server/native/decoder/Dockerfile --target test -t decoder-test server/
+          docker build -f server/native/decoder/Dockerfile --target adapter-test -t decoder-adapter server/
+      - name: Sandbox self-tests (minijail tier)
+        run: docker run --rm --privileged decoder-test
+      - name: Gleam adapter tests (minijail tier)
+        run: docker run --rm --privileged decoder-adapter
+      - name: Gleam adapter tests (unprivileged tier)
+        # Ubuntu 24.04 restricts unprivileged user namespaces; this tier
+        # relies on Landlock and seccomp instead.
+        run: docker run --rm --user 1000 -e TIER=unprivileged decoder-adapter
