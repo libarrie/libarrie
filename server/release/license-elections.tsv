@@ -1,0 +1,7 @@
+# Recorded elections for dual-licensed components (DESIGN.md section 3).
+# The license gate accepts a GPL-family alternative in a component's license
+# expression only when the component is listed here with a non-GPL election
+# that is one of the expression's alternatives.
+# component	elected	note
+zstd	BSD-3-Clause	Vendored in the Erlang runtime (erts/emulator/zstd); dual BSD-3-Clause OR GPL-2.0-only
+libcap	BSD-3-Clause	Statically linked into the decoder launcher; dual BSD-3-Clause OR GPL-2.0-only
