@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The brand's three books (assets/brand/libarrie-icon.png), redrawn inside the
+     adaptive icon's 66dp safe zone of a 108dp canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:translateX="8.90" android:translateY="11.35"
+        android:scaleX="0.0702" android:scaleY="0.0702">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M396,296 H462 A34,34 0 0 1 496,330 V1001 A34,34 0 0 1 462,1035 H396 A34,34 0 0 1 362,1001 V330 A34,34 0 0 1 396,296 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M549,182 H656 A34,34 0 0 1 690,216 V1001 A34,34 0 0 1 656,1035 H549 A34,34 0 0 1 515,1001 V216 A34,34 0 0 1 549,182 Z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M697,378 Q694,352 722,346 L776,337 Q803,333 808,360 L924,990 Q929,1016 902,1024 L848,1034 Q821,1038 816,1012 Z" />
+    </group>
+</vector>

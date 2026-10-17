@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Device backup and transfer (section 13): pending captures and their
+  recovery manifest are included; tokens never are. Tokens live in
+  no_backup and are encrypted with a Keystore key that never leaves the
+  device. Image caches are in cache/, which is never backed up.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="captures/" />
+        <include domain="sharedpref" path="settings.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="captures/" />
+        <include domain="sharedpref" path="settings.xml" />
+    </device-transfer>
+</data-extraction-rules>
