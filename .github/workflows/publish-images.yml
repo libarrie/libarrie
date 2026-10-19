@@ -1,0 +1,97 @@
+# Publishes the release images to GitHub Container Registry for a version
+# tag (v1.2.3), on amd64 and arm64:
+#   ghcr.io/libarrie/libarrie-api:1.2.3     (also 1.2 and latest)
+#   ghcr.io/libarrie/libarrie-worker:1.2.3
+# Each architecture builds natively (Erlang/OTP is compiled from source),
+# pushes by digest, and a final job joins the digests into one tag. The
+# build itself runs the license gate and smoke checks (release-images.yml
+# describes them); the CycloneDX SBOMs are kept as artifacts.
+name: publish-images
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io/libarrie
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push by digest
+        run: |
+          mkdir -p digests
+          for target in api worker; do
+            docker buildx build -f server/release/Dockerfile --target "$target" \
+              --platform "linux/${{ matrix.arch }}" \
+              --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+              --label "org.opencontainers.image.version=${GITHUB_REF_NAME#v}" \
+              --label "org.opencontainers.image.revision=${{ github.sha }}" \
+              --label "org.opencontainers.image.licenses=Apache-2.0" \
+              --output "type=image,name=$REGISTRY/libarrie-$target,push-by-digest=true,name-canonical=true,push=true" \
+              --metadata-file "meta-$target.json" .
+            jq -r '."containerimage.digest"' "meta-$target.json" > "digests/$target"
+          done
+      - name: SBOM
+        run: docker buildx build -f server/release/Dockerfile --target sbom --output type=local,dest=out/sbom .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: digests/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.arch }}
+          path: out/sbom/sbom.cdx.json
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digests-*
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tag the multi-architecture images
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          minor="${version%.*}"
+          for target in api worker; do
+            image="$REGISTRY/libarrie-$target"
+            sources=()
+            for arch in amd64 arm64; do
+              sources+=("$image@$(cat "digests-$arch/$target")")
+            done
+            docker buildx imagetools create \
+              -t "$image:$version" -t "$image:$minor" -t "$image:latest" "${sources[@]}"
+            docker buildx imagetools inspect "$image:$version"
+          done
