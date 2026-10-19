@@ -1,0 +1,149 @@
+# Libarrie for a personal or small self-hosted deployment, on one machine.
+# See docs/self-hosting.md. In this directory:
+#   cp .env.example .env     # then fill it in
+#   docker compose pull      # or `docker compose build` to build the images
+#   docker compose up -d
+#
+# Caddy terminates HTTPS for two names: the app (LIBARRIE_DOMAIN) and the
+# object store (LIBARRIE_FILES_DOMAIN), which browsers and the apps upload to
+# and download from directly with presigned URLs. Only Caddy publishes ports.
+name: libarrie
+
+x-server-env: &server-env
+  LIBARRIE_MODE: selfhost
+  PORT: "8080"
+  # /internal (only enabled by INTERNAL_API_TOKEN) never goes through Caddy.
+  INTERNAL_PORT: "8081"
+  WEB_ORIGIN: https://${LIBARRIE_DOMAIN:?set LIBARRIE_DOMAIN in .env}
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:?set SECRET_KEY_BASE in .env}
+  IDENTITY_HASH_KEYS: ${IDENTITY_HASH_KEYS:?set IDENTITY_HASH_KEYS in .env}
+  DATABASE_URL: postgres://libarrie:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/libarrie
+  # Sign-in through your identity provider (OpenID Connect).
+  OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER in .env}
+  OIDC_JWKS_URL: ${OIDC_JWKS_URL:?set OIDC_JWKS_URL in .env}
+  OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:?set OIDC_CLIENT_ID in .env}
+  OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+  OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+  OIDC_NATIVE_CLIENT_ID: ${OIDC_NATIVE_CLIENT_ID:-}
+  LIBARRIE_OWNER: ${LIBARRIE_OWNER:-}
+  MCP_OAUTH_AUDIENCE: ${MCP_OAUTH_AUDIENCE:-}
+  MCP_OAUTH_SCOPES: ${MCP_OAUTH_SCOPES:-}
+  # Object storage: the bundled SeaweedFS by default, or any S3-compatible
+  # store such as Cloudflare R2 (see docs/self-hosting.md).
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://objectstore:8333}
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://${LIBARRIE_FILES_DOMAIN:-}}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_BUCKET: ${S3_BUCKET:-libarrie}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+  S3_UPLOAD_INTEGRITY: ${S3_UPLOAD_INTEGRITY:-sha256}
+  JOURNAL_S3_ENDPOINT: ${JOURNAL_S3_ENDPOINT:-}
+  JOURNAL_S3_REGION: ${JOURNAL_S3_REGION:-}
+  JOURNAL_S3_BUCKET: ${JOURNAL_S3_BUCKET:-libarrie-journal}
+  JOURNAL_S3_ACCESS_KEY_ID: ${JOURNAL_S3_ACCESS_KEY_ID:-}
+  JOURNAL_S3_SECRET_ACCESS_KEY: ${JOURNAL_S3_SECRET_ACCESS_KEY:-}
+  # Handwriting recognition and search.
+  OCR_PROVIDER: mistral
+  MISTRAL_API_KEY: ${MISTRAL_API_KEY:?set MISTRAL_API_KEY in .env}
+  EMBEDDING_PROVIDER: voyage
+  VOYAGE_API_KEY: ${VOYAGE_API_KEY:?set VOYAGE_API_KEY in .env}
+  SPEND_ACCOUNT_DAILY_MICROS: ${SPEND_ACCOUNT_DAILY_MICROS:-5000000}
+  SPEND_DEPLOYMENT_DAILY_MICROS: ${SPEND_DEPLOYMENT_DAILY_MICROS:-50000000}
+  # Your own server: no page or notebook limits unless you set them.
+  DEFAULT_STORED_PAGES: ${DEFAULT_STORED_PAGES:-unlimited}
+  DEFAULT_NOTEBOOKS: ${DEFAULT_NOTEBOOKS:-unlimited}
+  DEFAULT_LIFETIME_PROCESSING: ${DEFAULT_LIFETIME_PROCESSING:-unlimited}
+  # Landlock + seccomp + rlimits; needs Linux 5.13+ and no extra privileges.
+  DECODER_SANDBOX: ${DECODER_SANDBOX:-unprivileged}
+
+x-images:
+  api: &api-image
+    image: ghcr.io/libarrie/libarrie-api:${LIBARRIE_VERSION:?set LIBARRIE_VERSION in .env}
+    build: { context: ../.., dockerfile: server/release/Dockerfile, target: api }
+  worker: &worker-image
+    image: ghcr.io/libarrie/libarrie-worker:${LIBARRIE_VERSION:?set LIBARRIE_VERSION in .env}
+    build: { context: ../.., dockerfile: server/release/Dockerfile, target: worker }
+
+services:
+  caddy:
+    image: caddy:2.10
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      LIBARRIE_DOMAIN: ${LIBARRIE_DOMAIN}
+      LIBARRIE_FILES_DOMAIN: ${LIBARRIE_FILES_DOMAIN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api: { condition: service_started }
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg17
+    environment:
+      POSTGRES_USER: libarrie
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: libarrie
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "libarrie"]
+      interval: 5s
+      retries: 30
+    restart: unless-stopped
+
+  # The bundled object store. With another S3-compatible store, remove this
+  # service and the files site in the Caddyfile.
+  objectstore:
+    image: chrislusf/seaweedfs:4.48
+    environment:
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+      ALLOWED_ORIGIN: https://${LIBARRIE_DOMAIN}
+    # Credentials come from .env; uploads are allowed from the app's origin.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        printf '{"identities":[{"name":"libarrie","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' \
+          "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY" > /tmp/s3.json
+        exec weed server -dir=/data -ip.bind=0.0.0.0 -s3 -s3.port=8333 \
+          -s3.config=/tmp/s3.json -s3.allowedOrigins="$$ALLOWED_ORIGIN" \
+          -master.volumeSizeLimitMB=1024
+    volumes:
+      - objdata:/data
+    restart: unless-stopped
+
+  migrate:
+    <<: *api-image
+    command: ["migrate"]
+    environment: *server-env
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  api:
+    <<: *api-image
+    command: ["serve"]
+    environment: *server-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  worker:
+    <<: *worker-image
+    environment: *server-env
+    tmpfs:
+      - /tmp:uid=10001,gid=10001
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  objdata:
+  caddy_data:
+  caddy_config:

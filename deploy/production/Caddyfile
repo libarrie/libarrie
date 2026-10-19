@@ -1,0 +1,17 @@
+# HTTPS for Libarrie (deploy/production/compose.yaml). Caddy gets and renews
+# certificates automatically; both names must resolve to this machine and
+# ports 80 and 443 must be reachable.
+
+# The web app, the API, the MCP server and the apps' sign-in callbacks.
+{$LIBARRIE_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy api:8080
+}
+
+# The object store. Browsers and the apps upload and download here with
+# presigned URLs, so requests pass through unchanged (the signature covers
+# the host, path and headers). With another S3-compatible store such as
+# Cloudflare R2, remove this site and the objectstore service.
+{$LIBARRIE_FILES_DOMAIN} {
+	reverse_proxy objectstore:8333
+}

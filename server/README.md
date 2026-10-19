@@ -198,6 +198,14 @@ docker run --rm -e DATABASE_URL=... libarrie-api migrate
 The first build compiles Erlang/OTP and takes a few minutes. `server/Dockerfile`
 remains the development image used by `compose.yaml`.
 
+## Run it for real
+
+`docs/self-hosting.md` covers a personal or small deployment with
+`deploy/production/compose.yaml`: HTTPS with Caddy, the release images, your
+identity provider, storage, backups and upgrades. Version tags (`v1.2.3`)
+publish the release images to `ghcr.io/libarrie/libarrie-api` and
+`ghcr.io/libarrie/libarrie-worker`.
+
 ## Try the whole stack with Docker Compose
 
 `compose.yaml` at the repository root runs Postgres, SeaweedFS, migrations,
