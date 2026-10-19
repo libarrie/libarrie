@@ -1,0 +1,239 @@
+# Libarrie Helm chart. Values marked REQUIRED must be set; rendering fails
+# with a message naming any that are missing. See README.md in this chart
+# and docs/self-hosting.md for what each one means.
+
+# REQUIRED. The public HTTPS origin of the web app, API and MCP server,
+# for example https://notes.example.com (no path or trailing slash).
+origin: ""
+
+# selfhost, or hosted (stricter startup checks; see server/README.md).
+mode: selfhost
+
+# Resource names default to <release>-libarrie (or <release> when it already
+# contains "libarrie"); set this to fix them.
+fullnameOverride: ""
+
+# A sign-in subject (`sub` claim) made an owner whenever it signs in.
+# Leave empty to claim ownership with the setup code in the API's log.
+owner: ""
+
+image:
+  api:
+    repository: ghcr.io/libarrie/libarrie-api
+    # Defaults to the chart's appVersion.
+    tag: ""
+  worker:
+    repository: ghcr.io/libarrie/libarrie-worker
+    tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Sign-in through your OpenID Connect provider.
+oidc:
+  # REQUIRED. The issuer exactly as it appears in tokens' `iss` claim.
+  issuer: ""
+  # REQUIRED. The provider's JWKS (`jwks_uri` in its discovery document).
+  jwksUrl: ""
+  # REQUIRED. The web client's ID. Its secret goes in secrets.oidcClientSecret.
+  clientId: ""
+  # Audience of access tokens from the iOS and Android apps (default libarrie).
+  audience: ""
+  # The apps' public (PKCE) client; native sign-in is off until set.
+  nativeClientId: ""
+  nativeRedirectUri: ""
+  # Override OIDC discovery (`<issuer>/.well-known/openid-configuration`).
+  authorizationEndpoint: ""
+  tokenEndpoint: ""
+
+# The MCP server at <origin>/mcp. API keys always work; identity-provider
+# access tokens need this audience (default <origin>/mcp).
+mcp:
+  oauthAudience: ""
+  oauthScopes: ""
+
+# Object storage (S3-compatible: Cloudflare R2, AWS S3, SeaweedFS, ...).
+storage:
+  # REQUIRED. The S3 API endpoint the pods use.
+  endpoint: ""
+  # REQUIRED. The endpoint browsers and the apps upload to and download from
+  # with presigned URLs; must be reachable from their devices over HTTPS,
+  # with CORS allowing `origin`.
+  publicEndpoint: ""
+  region: us-east-1
+  # REQUIRED.
+  bucket: ""
+  # sha256, or md5 for Cloudflare R2.
+  uploadIntegrity: sha256
+
+# The lifecycle journal (account deletions). Defaults to the primary store;
+# a separate store with a retention lock is safer (hosted mode requires it).
+journal:
+  endpoint: ""
+  region: ""
+  bucket: libarrie-journal
+
+# Handwriting recognition (Mistral) and search embeddings (Voyage AI).
+providers:
+  mistral:
+    model: ""
+    # Hosted mode requires a record of the provider's privacy terms.
+    termsRecord: ""
+  voyage:
+    model: ""
+    termsRecord: ""
+
+# Daily spending ceilings for the providers, in millionths of a US dollar.
+spend:
+  accountDailyMicros: 5000000
+  deploymentDailyMicros: 50000000
+
+# Limits per account when no entitlement is assigned: an integer or
+# "unlimited".
+limits:
+  storedPages: unlimited
+  notebooks: unlimited
+  lifetimeProcessing: unlimited
+
+# Image decoder sandbox: unprivileged (Linux 5.13+ with Landlock; works with
+# the default securityContext) or minijail (needs CAP_SYS_ADMIN or a pod
+# user namespace; see docs/runbooks/decoder-sandbox.md).
+decoder:
+  sandbox: unprivileged
+
+# Optional receiver of account lifecycle commands (its token goes in
+# secrets.lifecycleSubscriberToken).
+lifecycleSubscriber:
+  url: ""
+
+# Any other setting from server/README.md, as environment variables.
+config: {}
+
+secrets:
+  # The name of an existing Secret holding the keys below under their
+  # environment-variable names (DATABASE_URL, SECRET_KEY_BASE, ...). When
+  # set, the chart creates no Secret and the values below are ignored.
+  existingSecret: ""
+  # REQUIRED unless existingSecret is set.
+  # postgres://user:password@host:5432/libarrie: Postgres 17 where the
+  # vector (pgvector), pg_trgm and btree_gin extensions are available. The
+  # first migration creates them, so that user needs permission to.
+  databaseUrl: ""
+  # 64 or more random characters, the same for every replica.
+  secretKeyBase: ""
+  # key_id:secret, such as k1:<64 hex characters>. Keep it; see the guide.
+  identityHashKeys: ""
+  s3AccessKeyId: ""
+  s3SecretAccessKey: ""
+  mistralApiKey: ""
+  voyageApiKey: ""
+  # Optional.
+  oidcClientSecret: ""
+  journalS3AccessKeyId: ""
+  journalS3SecretAccessKey: ""
+  internalApiToken: ""
+  lifecycleSubscriberToken: ""
+  # Any other secret settings, by environment-variable name.
+  extra: {}
+
+api:
+  replicas: 2
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 1Gi }
+  # Upload validation decodes images here too; scratch space for it.
+  tmpSizeLimit: 1Gi
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Defaults to spreading replicas across nodes when empty.
+  topologySpreadConstraints: []
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+
+worker:
+  replicas: 2
+  # Jobs each worker runs at once.
+  concurrency: 4
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { memory: 2Gi }
+  # Scratch space for the image decoder.
+  tmpSizeLimit: 2Gi
+  terminationGracePeriodSeconds: 60
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  podDisruptionBudget:
+    enabled: true
+    maxUnavailable: 1
+  # Scale workers on the job queue with KEDA (https://keda.sh), which must
+  # be installed in the cluster. Replaces worker.replicas. KEDA connects
+  # with the worker's DATABASE_URL from its own namespace, so an in-cluster
+  # database needs its full name there (postgres.<namespace>.svc).
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 10
+    # Runnable and running jobs per worker before adding another; defaults
+    # to worker.concurrency.
+    jobsPerReplica: 0
+    pollingInterval: 30
+    cooldownPeriod: 300
+
+# Migrations run as a Job before each install and upgrade (a Helm hook).
+migrations:
+  activeDeadlineSeconds: 900
+  backoffLimit: 2
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 512Mi }
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+# The internal API (/internal/v1, enabled by secrets.internalApiToken) for an
+# entitlement authority. It's served only on this port, through the
+# ClusterIP Service <fullname>-internal, never through the Ingress.
+internalApi:
+  port: 8081
+
+ingress:
+  enabled: true
+  className: ""
+  # For example cert-manager.io/cluster-issuer: letsencrypt. MCP responses
+  # can stream (Server-Sent Events), so turn off response buffering if your
+  # controller buffers (nginx: nginx.ingress.kubernetes.io/proxy-buffering: "off").
+  annotations: {}
+  # Defaults to the host in `origin`.
+  host: ""
+  tls:
+    enabled: true
+    # Defaults to <release name>-tls.
+    secretName: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

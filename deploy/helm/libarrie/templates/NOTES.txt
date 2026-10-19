@@ -1,0 +1,16 @@
+Libarrie {{ .Chart.AppVersion }} is installed as "{{ .Release.Name }}" in {{ .Release.Namespace }}.
+
+Open {{ .Values.origin }} and sign in through your identity provider.
+{{- if .Values.owner }}
+{{ .Values.owner | quote }} becomes an owner when it signs in.
+{{- else }}
+
+To become the owner, find the one-time setup code in the API's log (each
+API replica prints its own; any of them works), then open
+{{ .Values.origin }}/setup and enter it:
+
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component=api --tail=200 | grep -A2 "setup"
+{{- end }}
+
+Agents can use the MCP server at {{ .Values.origin }}/mcp with an API key
+from Settings → API keys.

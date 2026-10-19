@@ -1,0 +1,123 @@
+{{- $fullname := include "libarrie.fullname" . -}}
+{{- $autoscaling := .Values.worker.autoscaling -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "libarrie.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  {{- if not $autoscaling.enabled }}
+  replicas: {{ .Values.worker.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "libarrie.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "libarrie.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+        {{- with .Values.worker.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "libarrie.configChecksum" . | nindent 8 }}
+        {{- with .Values.worker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "libarrie.podCommon" . | nindent 6 }}
+      # Jobs are leased: a stopped worker's jobs are picked up by another
+      # once their lease expires.
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      containers:
+        - name: worker
+          image: {{ include "libarrie.workerImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "libarrie.envFrom" . | nindent 10 }}
+          env:
+            - name: WORKER_CONCURRENCY
+              value: {{ .Values.worker.concurrency | quote }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.worker.tmpSizeLimit }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      topologySpreadConstraints:
+        {{- if .Values.worker.topologySpreadConstraints }}
+        {{- toYaml .Values.worker.topologySpreadConstraints | nindent 8 }}
+        {{- else }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "libarrie.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: worker
+        {{- end }}
+{{- if and .Values.worker.podDisruptionBudget.enabled (or $autoscaling.enabled (gt (int .Values.worker.replicas) 1)) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "libarrie.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  maxUnavailable: {{ .Values.worker.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "libarrie.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+{{- end }}
+{{- if $autoscaling.enabled }}
+---
+# Scale on the job queue rather than CPU: workers mostly wait on the OCR and
+# embedding providers. KEDA reads the worker's own DATABASE_URL.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "libarrie.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    name: {{ $fullname }}-worker
+  minReplicaCount: {{ $autoscaling.minReplicas }}
+  maxReplicaCount: {{ $autoscaling.maxReplicas }}
+  pollingInterval: {{ $autoscaling.pollingInterval }}
+  cooldownPeriod: {{ $autoscaling.cooldownPeriod }}
+  triggers:
+    - type: postgresql
+      metadata:
+        connectionFromEnv: DATABASE_URL
+        # Jobs running now plus jobs due to run.
+        query: >-
+          select count(*) from jobs
+          where state = 'running'
+             or (state in ('pending', 'retryable') and run_after <= now())
+        targetQueryValue: {{ default .Values.worker.concurrency $autoscaling.jobsPerReplica | quote }}
+{{- end }}

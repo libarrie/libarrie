@@ -1,0 +1,12 @@
+# Example values for CI: every required setting, with placeholders.
+origin: https://notes.example.com
+oidc:
+  issuer: https://auth.example.com
+  jwksUrl: https://auth.example.com/.well-known/jwks.json
+  clientId: libarrie
+storage:
+  endpoint: https://s3.example.com
+  publicEndpoint: https://s3.example.com
+  bucket: libarrie
+secrets:
+  existingSecret: libarrie-secrets

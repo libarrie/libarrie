@@ -202,7 +202,9 @@ remains the development image used by `compose.yaml`.
 
 `docs/self-hosting.md` covers a personal or small deployment with
 `deploy/production/compose.yaml`: HTTPS with Caddy, the release images, your
-identity provider, storage, backups and upgrades. Version tags (`v1.2.3`)
+identity provider, storage, backups and upgrades. For Kubernetes, the Helm
+chart in `deploy/helm/libarrie` runs several API and worker replicas, with
+optional autoscaling for the worker. Version tags (`v1.2.3`)
 publish the release images to `ghcr.io/libarrie/libarrie-api` and
 `ghcr.io/libarrie/libarrie-worker`.
 

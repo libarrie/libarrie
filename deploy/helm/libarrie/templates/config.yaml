@@ -1,0 +1,21 @@
+{{- include "libarrie.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "libarrie.fullname" . }}-config
+  labels:
+    {{- include "libarrie.labels" . | nindent 4 }}
+data:
+  {{- include "libarrie.configData" . | indent 2 }}
+{{- if not .Values.secrets.existingSecret }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "libarrie.secretName" . }}
+  labels:
+    {{- include "libarrie.labels" . | nindent 4 }}
+type: Opaque
+data:
+  {{- include "libarrie.secretData" . | indent 2 }}
+{{- end }}

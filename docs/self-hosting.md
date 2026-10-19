@@ -1,5 +1,9 @@
 # Self-hosting Libarrie
 
+For Kubernetes, use the Helm chart in `deploy/helm/libarrie` instead; its
+README covers installation. The identity provider, storage and backup
+sections below apply to both.
+
 This guide runs Libarrie for yourself, your family or a small group on one
 Linux machine, with `deploy/production/compose.yaml`. (`compose.yaml` at the
 repository root is a local development stack. Never make it reachable from
