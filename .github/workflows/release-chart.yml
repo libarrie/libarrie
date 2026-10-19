@@ -1,0 +1,61 @@
+# The Helm chart (deploy/helm/libarrie): linted on every change, and
+# published to the chart repository on GitHub Pages when its version in
+# Chart.yaml changes on main:
+#   helm repo add libarrie https://libarrie.github.io/libarrie
+# chart-releaser attaches each chart package to a GitHub Release
+# (libarrie-<version>, never marked latest) and updates index.yaml on the
+# gh-pages branch. One-time setup: create the gh-pages branch and serve
+# GitHub Pages from it.
+name: release-chart
+
+on:
+  push:
+    branches: [main]
+    paths: ["deploy/helm/**", ".github/workflows/release-chart.yml"]
+  pull_request:
+    paths: ["deploy/helm/**", ".github/workflows/release-chart.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint
+        run: helm lint deploy/helm/libarrie --strict -f deploy/helm/libarrie/ci/lint-values.yaml
+      - name: Validate the rendered manifests
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz \
+            | tar -xz kubeconform
+          helm template libarrie deploy/helm/libarrie -f deploy/helm/libarrie/ci/lint-values.yaml \
+            | ./kubeconform -strict -summary -kubernetes-version 1.30.0
+          helm template libarrie deploy/helm/libarrie -f deploy/helm/libarrie/ci/lint-values.yaml \
+              --api-versions keda.sh/v1alpha1/ScaledObject --set worker.autoscaling.enabled=true \
+            | ./kubeconform -strict -summary -kubernetes-version 1.30.0 -schema-location default \
+                -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+  release:
+    needs: lint
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+      - uses: azure/setup-helm@v4
+      - uses: helm/chart-releaser-action@v1.7.0
+        with:
+          charts_dir: deploy/helm
+          skip_existing: true
+          mark_as_latest: false
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
