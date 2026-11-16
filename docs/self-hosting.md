@@ -17,7 +17,7 @@ The stack runs:
 - the API and web app;
 - the background worker;
 - Postgres with pgvector;
-- SeaweedFS for page images, unless you use Cloudflare R2 or another
+- RustFS for page images, unless you use Cloudflare R2 or another
   S3-compatible store.
 
 Only Caddy is reachable from outside.
@@ -130,7 +130,7 @@ sign in. If you ever lose owner access, run
 
 ## Storage
 
-**Bundled (default).** SeaweedFS keeps page images in the `objdata` Docker
+**Bundled (default).** RustFS keeps page images in the `objects` Docker
 volume, behind Caddy at `LIBARRIE_FILES_DOMAIN`. Every request must be signed
 with your keys (the API hands out short-lived signed URLs), and browsers may
 only call it from your app's origin.
@@ -155,7 +155,7 @@ Back up the database and the page images together, plus `.env`:
 docker compose exec -T postgres pg_dump -U libarrie -Fc libarrie > libarrie-$(date +%F).dump
 ```
 
-For the bundled store, back up the `objdata` volume, for example by stopping
+For the bundled store, back up the `objects` volume, for example by stopping
 `objectstore` briefly and archiving the volume with your usual tool. With
 R2, use its own versioning or replication.
 
@@ -176,6 +176,10 @@ To restore:
    ```
 
 Migrations run before the API and worker start. Take a backup first.
+
+Releases before the switch to RustFS bundled SeaweedFS. RustFS can't read
+SeaweedFS's volume, so if you use the bundled store, copy the page images
+across when you upgrade: see `docs/runbooks/seaweedfs-to-rustfs.md`.
 
 ## Troubleshooting
 

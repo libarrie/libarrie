@@ -24,7 +24,7 @@ apply here.
   database user needs permission to. A managed Postgres that offers
   pgvector, or CloudNativePG with a pgvector image, both work.
 - **S3-compatible object storage**, such as Cloudflare R2, AWS S3 or
-  SeaweedFS. Browsers and the apps upload and download with presigned URLs,
+  RustFS. Browsers and the apps upload and download with presigned URLs,
   so its public endpoint must be reachable from their devices over HTTPS,
   with CORS allowing your origin. See
   `docs/runbooks/r2-storage-and-journal.md`.

@@ -27,11 +27,13 @@ contracts/               OpenAPI and entitlement contract
 Requirements: Gleam 1.19+, Erlang/OTP 27+, Docker.
 
 ```sh
-# Postgres with pgvector and SeaweedFS (S3); see deploy/docker-compose.yml.
+# Postgres with pgvector and RustFS (S3); see deploy/docker-compose.yml.
 docker run -d --name libarrie-pg -e POSTGRES_USER=libarrie -e POSTGRES_PASSWORD=libarrie \
   -e POSTGRES_DB=libarrie -p 5433:5432 pgvector/pgvector:pg17
-docker run -d --name libarrie-s3 -p 8333:8333 -v "$PWD/deploy/dev/s3.json:/etc/seaweedfs/s3.json:ro" \
-  chrislusf/seaweedfs:latest server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+docker run -d --name libarrie-s3 -p 8333:8333 -e RUSTFS_ADDRESS=:8333 \
+  -e RUSTFS_ACCESS_KEY=libarrie-dev-access -e RUSTFS_SECRET_KEY=libarrie-dev-secret \
+  -e RUSTFS_CONSOLE_ENABLE=false -e RUSTFS_CORS_ALLOWED_ORIGINS=http://localhost:8080 \
+  rustfs/rustfs:1.0.6
 
 export DEV_ISSUER_SECRET=dev-secret INTERNAL_API_TOKEN=internal-dev
 cd server/apps/api
@@ -71,7 +73,7 @@ cd ../worker && gleam run            # or `gleam run -- once` to drain once
 | `SECRET_KEY_BASE` | random (dev only) | 64+ characters, identical on all replicas; required in hosted mode |
 | `WEB_STATIC_DIR` | `../../../clients/web/static` | Web assets |
 | `LIFECYCLE_SUBSCRIBER_URL`, `LIFECYCLE_SUBSCRIBER_TOKEN` | — | Optional receiver of account lifecycle commands (`PUT {url}/accounts/{id}/lifecycle`); never required to boot (ADR 0009) |
-| `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | local SeaweedFS | Private bucket |
+| `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | local RustFS | Private bucket |
 | `JOURNAL_BUCKET` | `libarrie-journal` | Interim lifecycle journal target (worker) |
 | `DEFAULT_STORED_PAGES`, `DEFAULT_NOTEBOOKS`, `DEFAULT_LIFETIME_PROCESSING` | `30`, `1`, `30` | Defaults when no assignment exists; integer or `unlimited` |
 | `ACCOUNT_JOB_SLOTS` | `4` | Per-account running-job cap |
@@ -151,7 +153,7 @@ TIER=unprivileged server/scripts/test-linux.sh  # non-root, default profile
 
 `scripts/test.sh` creates a fresh `libarrie_test` database, runs the unit suites, applies
 migrations and runs the API integration suite against real Postgres and
-SeaweedFS. The integration suite covers the upload → OCR → index → search
+RustFS. The integration suite covers the upload → OCR → index → search
 slice and these section 17 scenarios:
 - the last-slot race;
 - operation replay and changed bodies;
@@ -210,7 +212,7 @@ publish the release images to `ghcr.io/libarrie/libarrie-api` and
 
 ## Try the whole stack with Docker Compose
 
-`compose.yaml` at the repository root runs Postgres, SeaweedFS, migrations,
+`compose.yaml` at the repository root runs Postgres, RustFS, migrations,
 the worker and the API/web UI from one image (`server/Dockerfile`):
 
 ```sh

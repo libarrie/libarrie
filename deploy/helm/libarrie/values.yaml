@@ -51,7 +51,7 @@ mcp:
   oauthAudience: ""
   oauthScopes: ""
 
-# Object storage (S3-compatible: Cloudflare R2, AWS S3, SeaweedFS, ...).
+# Object storage (S3-compatible: Cloudflare R2, AWS S3, RustFS, ...).
 storage:
   # REQUIRED. The S3 API endpoint the pods use.
   endpoint: ""

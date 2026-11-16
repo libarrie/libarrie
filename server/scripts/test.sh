@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run every server test suite. Integration suites need the development stack
-# (Postgres with pgvector on :5433 and SeaweedFS S3 on :8333); see
-# deploy/README.md. A fresh `libarrie_test` database is created per run.
+# (Postgres with pgvector on :5433 and RustFS S3 on :8333); see
+# deploy/docker-compose.yml. A fresh `libarrie_test` database is created per
+# run.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

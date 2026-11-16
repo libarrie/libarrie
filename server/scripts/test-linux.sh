@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs every server suite inside Linux with the sandboxed decoder enabled,
-# against the development Postgres and SeaweedFS containers.
+# against the development Postgres and RustFS containers.
 #   TIER=minijail (default, privileged container) or TIER=unprivileged
 #   (non-root, default container profile: Landlock + seccomp tier).
 set -euo pipefail

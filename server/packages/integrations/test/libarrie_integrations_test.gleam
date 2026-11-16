@@ -87,7 +87,7 @@ pub fn sigv4_encoding_test() {
   let assert "staging/a%20b/c" = storage.encode_path("staging/a b/c")
 }
 
-/// Runs only when LIBARRIE_TEST_S3_ENDPOINT is set (local SeaweedFS stack).
+/// Runs only when LIBARRIE_TEST_S3_ENDPOINT is set (local RustFS stack).
 pub fn object_store_contract_test() {
   case envoy.get("LIBARRIE_TEST_S3_ENDPOINT") {
     Error(_) -> Nil
