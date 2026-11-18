@@ -12,7 +12,7 @@ import simplifile
 fn config(bin_dir: String) -> Result(decoder.Config, Nil) {
   case envoy.get("LIBARRIE_DECODER_BIN"), envoy.get("LIBARRIE_DECODER_TIER") {
     Ok(_), Ok(tier) -> {
-      let policy = "/opt/libarrie/policy/decoder.aarch64.policy"
+      let policy = "/opt/libarrie/policy/decoder.policy"
       let sandbox = case tier {
         "unprivileged" -> decoder.Unprivileged(policy:)
         _ ->
