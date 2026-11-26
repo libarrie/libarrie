@@ -46,7 +46,8 @@ oidc:
   tokenEndpoint: ""
 
 # The MCP server at <origin>/mcp. API keys always work; identity-provider
-# access tokens need this audience (default <origin>/mcp).
+# access tokens need this audience (default <origin>/mcp). Must differ from
+# oidc.audience; Libarrie refuses to start otherwise.
 mcp:
   oauthAudience: ""
   oauthScopes: ""

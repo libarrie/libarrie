@@ -67,7 +67,7 @@ cd ../worker && gleam run            # or `gleam run -- once` to drain once
 | `JOBS_ARCHIVE_RETENTION_DAYS` | `30` | Finished jobs stay in `jobs_archive` this long, then the hourly prune deletes them |
 | `OIDC_NATIVE_CLIENT_ID` | `libarrie-native` with the dev issuer, else none | Public (PKCE) client for the native apps; native sign-in is off until set |
 | `OIDC_NATIVE_REDIRECT_URI` | `libarrie://oauth/callback` | Must be registered with the issuer for the native client |
-| `MCP_OAUTH_AUDIENCE` | `WEB_ORIGIN` + `/mcp` | Audience of identity-provider access tokens accepted by the MCP server (ADR 0012). Ignored with the development issuer, where only API keys work |
+| `MCP_OAUTH_AUDIENCE` | `WEB_ORIGIN` + `/mcp` | Audience of identity-provider access tokens accepted by the MCP server (ADR 0012). Must differ from `OIDC_AUDIENCE`, compared exactly; otherwise every Libarrie process refuses to start, `migrate` included (ADR 0017). Not used for sign-in with the development issuer, where only API keys work, but still checked at startup |
 | `MCP_OAUTH_SCOPES` | none | Space-separated scopes MCP clients should request from the identity provider |
 | `LIBARRIE_OWNER` | — | A sign-in subject made an owner whenever it signs in (ADR 0011); otherwise claim ownership with the setup code printed at startup |
 | `SECRET_KEY_BASE` | random (dev only) | 64+ characters, identical on all replicas; required in hosted mode |
@@ -121,7 +121,9 @@ keyword `libarrie:text`, or a JPEG COM segment. Markers such as `[[blank]]`,
 The API serves an MCP server at `/mcp` (Streamable HTTP; ADR 0012) so
 agents can search a person's notes and read page text. Its tools are
 `get_me`, `search` (`query`, optional `notebook`) and `get_text`
-(`notebook`, `page`). A notebook is named by its name or ID.
+(`notebook`, `page`). A notebook is named by its name or ID. Search results
+from private notebooks have no snippet, and `get_text` refuses their pages
+(ADR 0017).
 
 Authenticate with an API key, created under Settings → API keys, sent as
 `Authorization: Bearer lbk_…`. For example, with Claude Code:

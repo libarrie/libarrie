@@ -38,7 +38,9 @@ Every request needs `Authorization: Bearer` with either of these:
   server: `WEB_ORIGIN` + `/mcp`, or `MCP_OAUTH_AUDIENCE`. A token issued for
   the API or the native apps doesn't work here, as RFC 8707 resource
   binding intends. A first sign-in creates the account, as it does for the
-  native apps.
+  native apps. The effective MCP audience must differ from `OIDC_AUDIENCE`,
+  compared exactly, or every Libarrie process refuses to start: private
+  notebooks depend on MCP tokens never working on `/v1` (ADR 0017).
 
 A request that fails authentication gets **401 with `WWW-Authenticate:
 Bearer`**:
@@ -94,8 +96,8 @@ authenticated person's notes and never run as tasks.
 | Tool | Arguments | Returns |
 | --- | --- | --- |
 | `get_me` | none | User ID, name, email; account ID and status |
-| `search` | `query`; optional `notebook` | Up to 10 pages: notebook (ID, name), page number, snippet |
-| `get_text` | `notebook`, `page` | The page's selected transcript text |
+| `search` | `query`; optional `notebook` | Up to 10 pages: notebook (ID, name), page number, snippet. Pages in private notebooks come without a snippet (ADR 0017) |
+| `get_text` | `notebook`, `page` | The page's selected transcript text. Pages in private notebooks are refused (ADR 0017) |
 
 - **Naming a notebook:** `notebook` takes a notebook ID, or a name matched
   ignoring case and surrounding spaces. Names aren't unique:
@@ -104,9 +106,9 @@ authenticated person's notes and never run as tasks.
 - **Search** is the same hybrid search as `/v1/search`, with the same rate
   limit and query-embedding budget.
 - **Errors come back as tool errors**, which the agent can read and act on.
-  This covers bad arguments, a missing page, a page not transcribed yet, and
-  a blocked or closed account. Results carry both a text block and
-  structured content.
+  This covers bad arguments, a missing page, a page not transcribed yet, a
+  page in a private notebook (ADR 0017), and a blocked or closed account.
+  Results carry both a text block and structured content.
 - **Blocked accounts** (ADR 0011) still authenticate. `get_me` reports the
   status, and `search` and `get_text` refuse. Closed accounts are refused
   the same way.

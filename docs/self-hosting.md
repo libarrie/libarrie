@@ -68,9 +68,10 @@ Register these in the provider:
      audience your provider puts in them (the default is `libarrie`).
 3. **For agents signing in to the MCP server with OAuth (optional):** the
    provider must issue JWT access tokens whose audience is
-   `https://notes.example.com/mcp`, and let MCP clients register. Most
-   people use an API key instead (Settings → API keys), which needs nothing
-   here.
+   `https://notes.example.com/mcp`, and let MCP clients register. That
+   audience (or `MCP_OAUTH_AUDIENCE`, if you set it) must differ from
+   `OIDC_AUDIENCE`; Libarrie refuses to start otherwise. Most people use an
+   API key instead (Settings → API keys), which needs nothing here.
 
 `OIDC_ISSUER` is the provider's issuer URL, exactly as it appears in its
 tokens. `OIDC_JWKS_URL` is its key set, listed as `jwks_uri` in
@@ -160,10 +161,29 @@ For the bundled store, back up the `objects` volume, for example by stopping
 R2, use its own versioning or replication.
 
 To restore:
-1. Start a fresh stack with the same `.env`.
-2. Restore the database with `pg_restore` and the page images.
-3. Before anyone uses it, replay the journal so deletions made after the
+1. Pause the MCP server first. A restore loses privacy changes and page
+   moves made after the backup, so agents must not reach the restored
+   notebooks until their owners have re-checked them (ADR 0017). Add this
+   line to the `{$LIBARRIE_DOMAIN}` site in `Caddyfile`:
+
+   ```
+   respond /mcp* "MCP is paused." 503
+   ```
+
+2. Start a fresh stack with the same `.env`. Check the pause:
+   `curl -i https://notes.example.com/mcp` must return 503 with the body
+   `MCP is paused.`. A 401 with a `WWW-Authenticate` header means the line
+   isn't in effect: if the stack was already running, run
+   `docker compose restart caddy`.
+3. Restore the database with `pg_restore` and the page images.
+4. Before anyone uses it, replay the journal so deletions made after the
    backup are applied again: `docker compose run --rm api journal-replay`.
+5. Tell everyone with an account the backup's time. Ask them to re-check
+   which notebooks are private, to move again any pages they moved after
+   it, and to revoke again any API key they revoked after it (Settings →
+   Manage API keys): the restore brings those keys back.
+6. Once they have, remove the `respond` line and run
+   `docker compose restart caddy`.
 
 ## Upgrade
 
@@ -176,6 +196,13 @@ To restore:
    ```
 
 Migrations run before the API and worker start. Take a backup first.
+
+Before going back to a release from before private notebooks, pause the MCP
+server and check the pause, as in "To restore", before you change
+`LIBARRIE_VERSION`: an older release ignores the flag, so it would give
+agents the text of private notebooks. The `Caddyfile` is mounted from this
+directory, so changing the version keeps the pause. Keep it until a release
+with private notebooks is back (ADR 0017).
 
 Releases before the switch to RustFS bundled SeaweedFS. RustFS can't read
 SeaweedFS's volume, so if you use the bundled store, copy the page images
