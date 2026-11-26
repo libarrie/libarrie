@@ -31,6 +31,16 @@ fn render(app: router.App, method: http.Method, path: String, cookie: String, cs
   simulate.read_body(resp)
 }
 
+/// The notebook screen with its settings open, so the audit covers the
+/// notebook form's fieldsets.
+fn open_settings(html: String) -> String {
+  let opened =
+    string.replace(html, "id=\"notebook-settings\"", "id=\"notebook-settings\" open")
+  // A markup change must not silently skip the audit.
+  let assert True = opened != html
+  opened
+}
+
 pub fn accessibility_snapshots_test() {
   case envoy.get("LIBARRIE_A11Y_SNAPSHOTS") {
     Error(_) -> Nil
@@ -52,6 +62,12 @@ pub fn accessibility_snapshots_test() {
       let #(_, page) = support.upload_page(app, token, notebook, 1, Some("Met Grace Hopper about the compiler budget"), "immediate")
       let #(_, _) = support.upload_page(app, token, notebook, 2, Some("Process me later"), "deferred")
       let #(_, trashed) = support.upload_page(app, token, notebook, 3, Some("Old draft"), "immediate")
+      // A private notebook, so the search screen shows a hit without its
+      // text next to one with it.
+      support.raise_limits(app, token)
+      let diary = support.notebook(app, token, "Diary")
+      support.set_private(app, token, diary, True)
+      let #(_, _) = support.upload_page(app, token, diary, 1, Some("Grace Hopper birthday surprise"), "immediate")
       support.drain(app)
       let version =
         support.get(support.call(app, http.Get, "/v1/pages/" <> trashed, token, None, []), ["page", "version"], decode.int)
@@ -94,6 +110,7 @@ pub fn accessibility_snapshots_test() {
         #("dev-sign-in", http.Get, "/dev-issuer/authorize?client_id=libarrie&redirect_uri=x&state=s&nonce=n&code_challenge=c", False, []),
         #("notebooks", http.Get, "/notebooks", True, []),
         #("notebook", http.Get, "/notebooks/" <> notebook, True, []),
+        #("notebook-settings", http.Get, "/notebooks/" <> notebook, True, []),
         #("renumber", http.Get, "/notebooks/" <> notebook <> "/renumber", True, []),
         #("upload", http.Get, "/notebooks/" <> notebook <> "/upload", True, []),
         #("page", http.Get, "/pages/" <> page, True, []),
@@ -140,7 +157,10 @@ pub fn accessibility_snapshots_test() {
               True -> "; " <> session
               False -> ""
             }
-          let html = render(app, method, path, cookie, csrf, form)
+          let html = case name {
+            "notebook-settings" -> open_settings(render(app, method, path, cookie, csrf, form))
+            _ -> render(app, method, path, cookie, csrf, form)
+          }
           let assert True = string.starts_with(html, "<!doctype html>")
           let assert Ok(_) = simplifile.write(directory <> "/" <> name <> "-" <> theme <> ".html", html)
           Nil

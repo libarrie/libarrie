@@ -60,6 +60,13 @@ pub fn api_fixtures_test() {
     "search",
     call(http.Post, "/v1/search", Some(json.object([#("query", json.string("Hopper"))]))),
   )
+  // Hits from a private notebook have no snippet or highlights (ADR 0017).
+  support.set_private(app, token, notebook, True)
+  record(
+    "search_private",
+    call(http.Post, "/v1/search", Some(json.object([#("query", json.string("Hopper"))]))),
+  )
+  support.set_private(app, token, notebook, False)
   record("usage", call(http.Get, "/v1/usage", None))
   let #(_, _) = support.upload_page(app, token, notebook, 2, Some("Process me later"), "deferred")
   record("pages_awaiting_processing", call(http.Get, "/v1/pages/awaiting-processing", None))

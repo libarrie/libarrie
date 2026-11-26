@@ -115,7 +115,7 @@ pub fn create_notebook_form(csrf: String, error: Option(String)) -> Element(a) {
         html.button([attribute.type_("submit"), class("button")], [html.text("Create")]),
       ]),
       html.details([class("more-options")], [
-        html.summary([], [html.text("Description and color")]),
+        html.summary([], [html.text("Description, color and privacy")]),
         html.label([attribute.for("notebook-description")], [html.text("Description (optional)")]),
         html.div([attribute("hx-disable", "")], [
           html.textarea(
@@ -129,6 +129,7 @@ pub fn create_notebook_form(csrf: String, error: Option(String)) -> Element(a) {
           ),
         ]),
         color_choices(None),
+        private_choice(False),
       ]),
       case error {
         Some(message) -> ui.alert("danger", message)
@@ -465,7 +466,8 @@ pub type Hit {
     page_id: String,
     notebook_name: String,
     page_number: Int,
-    snippet: String,
+    /// None for a page in a private notebook.
+    snippet: Option(String),
     highlights: List(#(Int, Int)),
     match_kind: String,
     indexing_pending: Bool,
@@ -530,7 +532,12 @@ pub fn search_results(mode: String, migrating: Bool, hits: List(Hit)) -> List(El
                   html.text(hit.notebook_name <> " · Page " <> int.to_string(hit.page_number)),
                 ]),
               ]),
-              html.p([class("snippet"), attribute("hx-disable", "")], highlighted(hit.snippet, hit.highlights)),
+              case hit.snippet {
+                Some(snippet) ->
+                  html.p([class("snippet"), attribute("hx-disable", "")], highlighted(snippet, hit.highlights))
+                None ->
+                  html.p([class("muted small")], [html.text("Private notebook. The matching text isn't shown.")])
+              },
               case hit.indexing_pending {
                 True -> html.p([class("muted small")], [html.text("This page was edited since it was indexed.")])
                 False -> element.none()
@@ -739,7 +746,7 @@ pub fn settings_page(
     html.section([class("card")], [
       html.h2([], [html.text("AI agents")]),
       html.p([], [
-        html.text("Let an AI agent search your notes and read pages, with an API key."),
+        html.text("Let an AI agent search your notes and read pages outside private notebooks, with an API key."),
       ]),
       html.a([attribute.href("/settings/api-keys"), class("button secondary")], [
         html.text("Manage API keys"),
@@ -795,7 +802,7 @@ pub fn api_keys_page(
       html.h2([], [html.text("Connect an agent")]),
       html.p([], [
         html.text(
-          "Add Libarrie to your agent as a remote MCP server (Streamable HTTP) at this address, and send the key as a bearer token. The agent can search your notes and read page text; it can't change anything.",
+          "Add Libarrie to your agent as a remote MCP server (Streamable HTTP) at this address, and send the key as a bearer token. The agent can search your notes and read page text, except in private notebooks, where its searches show only which pages match. It can't change anything.",
         ),
       ]),
       html.p([], [html.code([], [html.text(mcp_url)])]),
@@ -1163,7 +1170,30 @@ fn color_choices(selected: Option(String)) -> Element(a) {
   ])
 }
 
-fn notebook_fields(prefix: String, name: String, description: String, color: Option(String), required: Bool) -> List(Element(a)) {
+/// The private-notebook checkbox and its `private_shown` marker. The server
+/// reads the checkbox only when the marker is posted, so an unchecked box
+/// clears the flag and a form without this control leaves it alone.
+fn private_choice(checked: Bool) -> Element(a) {
+  html.fieldset([], [
+    html.legend([], [html.text("Privacy")]),
+    hidden("private_shown", "1"),
+    checkbox("private", "true", html.text("Private notebook"), checked, False),
+    html.p([class("muted small")], [
+      html.text(
+        "Searches, including an AI agent's, show which of its pages match, but not the matching text. AI agents connected to Libarrie can't open its pages. Anything that uses your own sign-in, such as an assistant in your browser, still can. Libarrie still sends its pages to the AI services that transcribe them and make them searchable.",
+      ),
+    ]),
+  ])
+}
+
+fn notebook_fields(
+  prefix: String,
+  name: String,
+  description: String,
+  color: Option(String),
+  private: Bool,
+  required: Bool,
+) -> List(Element(a)) {
   [
     html.label([attribute.for(prefix <> "-name")], [html.text("Name")]),
     html.input([
@@ -1190,6 +1220,7 @@ fn notebook_fields(prefix: String, name: String, description: String, color: Opt
       ),
     ]),
     color_choices(color),
+    private_choice(private),
   ]
 }
 
@@ -1203,7 +1234,7 @@ pub fn notebook_settings(nb: Notebook, csrf: String) -> Element(a) {
       [
         ui.csrf_field(csrf),
         hidden("version", int.to_string(nb.version)),
-        ..list.append(notebook_fields("edit-notebook", nb.name, nb.description, nb.color, True), [
+        ..list.append(notebook_fields("edit-notebook", nb.name, nb.description, nb.color, nb.private, True), [
           html.button([attribute.type_("submit"), class("button")], [html.text("Save changes")]),
         ])
       ],

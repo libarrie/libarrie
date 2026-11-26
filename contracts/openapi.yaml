@@ -101,6 +101,7 @@ components:
         name: {type: string}
         description: {type: string}
         color: {type: [string, "null"], pattern: "^#[0-9A-Fa-f]{6}$"}
+        private: {type: boolean, description: "Search results from this notebook omit snippet and highlights; MCP get_text refuses its pages (ADR 0017)"}
         version: {type: integer}
         numbering_revision: {type: integer}
         page_count: {type: integer}
@@ -114,6 +115,39 @@ components:
         name: {type: string, minLength: 1, maxLength: 200}
         description: {type: string, maxLength: 2000}
         color: {type: string, pattern: "^(#[0-9A-Fa-f]{6})?$", description: "#RRGGBB; an empty string clears the color"}
+        # No default: on PATCH an omitted flag keeps the current value.
+        private: {type: boolean, description: "Omitted or null: false on create, unchanged on update."}
+    SearchResponse:
+      type: object
+      required: [search_mode, index_migration_pending, results]
+      properties:
+        search_mode: {enum: [hybrid, lexical_only]}
+        index_migration_pending: {type: boolean, description: "True while an embedding-model migration is reindexing this account"}
+        results: {type: array, items: {$ref: "#/components/schemas/SearchResult"}}
+    SearchResult:
+      type: object
+      description: "One result per page. A result from a private notebook has no snippet and no highlights: the keys are absent, not null (ADR 0017)."
+      required: [page_id, revision_id, transcript_revision_id, index_generation_id, indexing_pending, notebook, page_number, match_kind]
+      properties:
+        page_id: {type: string, format: uuid}
+        revision_id: {type: string, format: uuid}
+        transcript_revision_id: {type: string, format: uuid}
+        index_generation_id: {type: string, format: uuid}
+        indexing_pending: {type: boolean, description: "The page changed after this result's text was indexed"}
+        notebook: {type: object, required: [id, name], properties: {id: {type: string, format: uuid}, name: {type: string}}}
+        page_number: {type: integer, minimum: 1}
+        snippet: {type: string, description: "The matching text, from the indexed transcript. Absent when the page's notebook is private."}
+        highlights:
+          type: array
+          description: "Matches in snippet, as grapheme offsets. Absent when the page's notebook is private."
+          items:
+            type: object
+            properties:
+              kind: {const: text}
+              field: {const: snippet}
+              start: {type: integer, minimum: 0}
+              end: {type: integer, minimum: 0}
+        match_kind: {enum: [lexical, semantic, hybrid]}
     Page:
       type: object
       properties:
@@ -506,7 +540,8 @@ paths:
                 limit: {type: integer, minimum: 1, maximum: 50, default: 10}
       responses:
         "200":
-          description: "One result per page; search_mode is hybrid or lexical_only; index_migration_pending is true while an embedding-model migration is reindexing this account"
+          description: "One result per page; search_mode is hybrid or lexical_only; index_migration_pending is true while an embedding-model migration is reindexing this account. Results from private notebooks omit snippet and highlights."
+          content: {application/json: {schema: {$ref: "#/components/schemas/SearchResponse"}}}
   /internal/v1/accounts/{id}/entitlements:
     parameters: [{$ref: "#/components/parameters/Id"}]
     put:

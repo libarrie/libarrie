@@ -4,7 +4,7 @@ import { watch, cspViolations, signIn } from "./helpers";
 
 async function createNotebook(page: Page, name: string) {
   await page.getByLabel("New notebook").fill(name);
-  await page.getByText("Description and color").click();
+  await page.getByText("Description, color and privacy").click();
   await page.getByLabel("Description (optional)").fill("Green cover");
   await page.getByLabel("Green").check();
   await page.getByRole("button", { name: "Create" }).click();
@@ -55,6 +55,24 @@ test("notebook settings, renumbering, replacement scan and export", async ({ pag
     await page.reload();
     await expect(page.locator("#transcript-text")).toHaveValue("Calibrated the spectrometer twice", { timeout: 1_000 });
   }).toPass({ timeout: 60_000 });
+  expect(await cspViolations(page)).toEqual([]);
+
+  // Make the notebook private: search still links to the page, without its
+  // text, and the owner's own page screen still shows the text.
+  await page.getByRole("navigation", { name: "Breadcrumb" }).getByRole("link", { name: "Lab book" }).click();
+  await page.getByText("Notebook settings").click();
+  await page.getByLabel("Private notebook").check();
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText("Notebook saved.")).toBeVisible();
+  await page.getByRole("link", { name: "Search", exact: true }).click();
+  await page.getByLabel("Search your notes").fill("spectrometer");
+  await page.getByRole("button", { name: "Search" }).click();
+  const hit = page.getByRole("link", { name: "Lab book · Page 2" });
+  await expect(hit).toBeVisible();
+  await expect(page.locator("#results .snippet")).toHaveCount(0);
+  await expect(page.locator("#results")).toContainText("Private notebook. The matching text isn't shown.");
+  await hit.click();
+  await expect(page.locator("#transcript-text")).toHaveValue("Calibrated the spectrometer twice");
   expect(await cspViolations(page)).toEqual([]);
 
   // Export everything; the list polls until the files are ready.
