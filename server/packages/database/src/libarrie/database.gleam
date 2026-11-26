@@ -130,6 +130,10 @@ pub fn nullable_int(value: Option(Int)) -> pog.Value {
   pog.nullable(pog.int, value)
 }
 
+pub fn nullable_bool(value: Option(Bool)) -> pog.Value {
+  pog.nullable(pog.bool, value)
+}
+
 pub fn text_array(values: List(String)) -> pog.Value {
   pog.array(pog.text, values)
 }
