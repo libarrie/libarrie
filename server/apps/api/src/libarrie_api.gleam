@@ -231,7 +231,8 @@ fn dev_token(config: Settings, subject: String, name: String) -> Nil {
   }
 }
 
-fn verifier(config: Settings) -> Result(identity.Verifier, String) {
+/// The `/v1` verifier: identity-provider tokens for `OIDC_AUDIENCE`.
+pub fn verifier(config: Settings) -> Result(identity.Verifier, String) {
   use keys <- result.try(case config.development_issuer_secret, config.oidc_jwks_url {
     Some(secret), _ -> Ok(identity.Hs256Secret(secret))
     // Re-fetched when a token names an unknown key ID (key rotation).
@@ -349,17 +350,18 @@ pub fn mcp_config(
   verifier: identity.Verifier,
   secret_key_base: String,
 ) -> mcp.Config {
-  let resource = config.web_origin <> mcp.path
   mcp.Config(
     ctx:,
-    resource:,
+    resource: settings.mcp_resource(config),
     oauth: case config.development_issuer_secret {
       Some(_) -> None
       None ->
         Some(mcp.OAuth(
+          // `settings.load` refuses to start when this equals the `/v1`
+          // audience (ADR 0017).
           verifier: identity.Verifier(
             ..verifier,
-            audience: option.unwrap(config.mcp_oauth_audience, resource),
+            audience: settings.mcp_audience(config),
           ),
           scopes: config.mcp_oauth_scopes,
         ))
