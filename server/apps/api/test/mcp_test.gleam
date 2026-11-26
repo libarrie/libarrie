@@ -156,7 +156,7 @@ fn call(
 }
 
 type Person {
-  Person(subject: String, token: String, user_id: String, key: String)
+  Person(subject: String, token: String, user_id: String, key: String, page_id: String)
 }
 
 /// Someone with a notebook "Field Notes" holding one transcribed page.
@@ -164,7 +164,7 @@ fn person_with_notes(app: router.App) -> Person {
   let subject = "mcp-" <> support.random_id()
   let token = support.token_for(subject, 0)
   let notebook = support.notebook(app, token, "Field Notes")
-  let #(_, _) =
+  let #(_, page_id) =
     support.upload_page(
       app,
       token,
@@ -178,7 +178,7 @@ fn person_with_notes(app: router.App) -> Person {
     support.sql_str(app, "select user_id::text from identities where subject = $1", [subject])
   let assert Ok(Some(principal)) = accounts.by_user(app.ctx.db, user_id)
   let assert Ok(#(_, key)) = api_keys.create(app.ctx, principal, "Test agent")
-  Person(subject:, token:, user_id:, key:)
+  Person(subject:, token:, user_id:, key:, page_id:)
 }
 
 pub fn failed_authentication_gets_a_bearer_challenge_test() {
@@ -383,6 +383,78 @@ pub fn api_keys_do_not_work_on_the_api_test() {
   let ada = person_with_notes(app)
   let assert 401 = support.call(app, http.Get, "/v1/me", ada.key, None, []).status
   let assert 401 = support.call(app, http.Get, "/v1/notebooks", ada.key, None, []).status
+}
+
+/// `/v1` returns the text of private pages, so a token for the MCP audience
+/// must not work there (ADR 0017).
+pub fn mcp_tokens_do_not_work_on_the_api_test() {
+  let app = support.app()
+  let ada = person_with_notes(app)
+  let assert Ok(config) = settings.load()
+  let mint = fn(audience) {
+    identity.mint_development_token(
+      support.dev_secret,
+      config.oidc_issuer,
+      audience,
+      ada.subject,
+      "Test User",
+      support.now_seconds(),
+      3600,
+    )
+  }
+  let reads = fn(token) {
+    [
+      support.call(app, http.Get, "/v1/notebooks", token, None, []).status,
+      support.call(app, http.Get, "/v1/pages/" <> ada.page_id, token, None, []).status,
+    ]
+  }
+  let assert [200, 200] = reads(mint(config.oidc_audience))
+  let assert [401, 401] = reads(mint(settings.mcp_audience(config)))
+}
+
+/// The startup check compares the audience the MCP verifier really uses.
+pub fn mcp_config_takes_its_audience_from_settings_test() {
+  let app = support.app()
+  let assert Ok(config) = settings.load()
+  let verifier =
+    identity.Verifier(
+      issuer: config.oidc_issuer,
+      audience: config.oidc_audience,
+      keys: identity.Hs256Secret(support.dev_secret),
+      leeway_seconds: 0,
+    )
+  list.each([None, Some("https://mcp.example")], fn(audience) {
+    let cfg =
+      settings.Settings(
+        ..config,
+        development_issuer_secret: None,
+        mcp_oauth_audience: audience,
+      )
+    let built =
+      libarrie_api.mcp_config(
+        cfg,
+        app.ctx,
+        verifier,
+        "test-secret-key-base-0123456789abcdef-0123456789abcdef",
+      )
+    let assert True = built.resource == settings.mcp_resource(cfg)
+    let assert Some(oauth) = built.oauth
+    let assert True = oauth.verifier.audience == settings.mcp_audience(cfg)
+  })
+}
+
+/// And the audience the `/v1` verifier really uses. The client ID and the
+/// MCP audience differ from it, so taking either would fail.
+pub fn api_verifier_checks_the_oidc_audience_test() {
+  let assert Ok(config) = settings.load()
+  let cfg =
+    settings.Settings(
+      ..config,
+      oidc_client_id: config.oidc_audience <> "-web",
+      mcp_oauth_audience: Some(config.oidc_audience <> "-mcp"),
+    )
+  let assert Ok(verifier) = libarrie_api.verifier(cfg)
+  let assert True = verifier.audience == cfg.oidc_audience
 }
 
 pub fn people_manage_api_keys_in_settings_test() {

@@ -65,6 +65,39 @@ pub type Settings {
   )
 }
 
+/// Where the API serves the MCP server (ADR 0012).
+pub const mcp_path = "/mcp"
+
+/// The MCP server's public URL, which is also its OAuth resource identifier.
+pub fn mcp_resource(config: Settings) -> String {
+  config.web_origin <> mcp_path
+}
+
+/// The audience of the identity-provider tokens the MCP server accepts:
+/// `MCP_OAUTH_AUDIENCE`, else the server's URL.
+pub fn mcp_audience(config: Settings) -> String {
+  option.unwrap(config.mcp_oauth_audience, mcp_resource(config))
+}
+
+/// MCP tokens must never work on `/v1`, which returns the text of private
+/// notebooks (ADR 0017), so the two audiences must differ. The verifiers
+/// match `aud` exactly, so this compares exactly too.
+pub fn check_mcp_audience(
+  oidc_audience: String,
+  mcp_audience: String,
+) -> Result(Nil, String) {
+  case oidc_audience == mcp_audience {
+    False -> Ok(Nil)
+    True ->
+      Error(
+        "the MCP audience (MCP_OAUTH_AUDIENCE, or WEB_ORIGIN + /mcp when it's unset) equals OIDC_AUDIENCE (\""
+        <> oidc_audience
+        <> "\"); MCP access tokens would then also work on /v1, which returns the text of private notebooks. "
+        <> "Give MCP its own audience (ADR 0017).",
+      )
+  }
+}
+
 /// Whether an origin is on this machine or a private network: an http://
 /// origin whose host is localhost or a loopback, private (RFC 1918) or
 /// link-local IP address, or a unique-local or link-local IPv6 address.
@@ -247,7 +280,7 @@ pub fn load() -> Result(Settings, String) {
       }
     _, _ -> Ok(Nil)
   })
-  Ok(Settings(
+  let config = Settings(
     mode:,
     database_url: get(
       "DATABASE_URL",
@@ -332,7 +365,9 @@ pub fn load() -> Result(Settings, String) {
         rescans_per_page_day: 3,
       ),
     ),
-  ))
+  )
+  use _ <- result.try(check_mcp_audience(config.oidc_audience, mcp_audience(config)))
+  Ok(config)
 }
 
 /// Select model provider adapters (section 6).

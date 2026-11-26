@@ -1,3 +1,4 @@
+import envoy
 import gleam/time/calendar as renewal_calendar
 import gleam/time/timestamp as renewal_timestamp
 import libarrie/domain/renewal
@@ -154,4 +155,44 @@ pub fn development_sign_in_stays_off_public_origins_test() {
   ]
   let assert True = list.all(allowed, settings.private_origin)
   let assert False = list.any(refused, settings.private_origin)
+}
+
+/// With equal audiences, MCP tokens would work on `/v1`, which returns the
+/// text of private notebooks (ADR 0017).
+pub fn mcp_audience_must_differ_from_the_api_audience_test() {
+  let assert Error(message) = settings.check_mcp_audience("libarrie", "libarrie")
+  let assert True = string.contains(message, "MCP_OAUTH_AUDIENCE")
+  let assert True = string.contains(message, "OIDC_AUDIENCE")
+  let assert Ok(Nil) = settings.check_mcp_audience("libarrie", "http://localhost:8080/mcp")
+  // Exact, like the verifiers' audience match.
+  let assert Ok(Nil) =
+    settings.check_mcp_audience("https://notes.example/mcp", "https://notes.example/mcp/")
+}
+
+/// `load` refuses equal effective audiences. The cases start from the
+/// caller's configuration, so exported variables can't change the outcome.
+pub fn settings_load_refuses_equal_audiences_test() {
+  let assert Ok(config) = settings.load()
+  // Load with one variable changed, then restore it before any assertion.
+  let load_with = fn(name, value) {
+    let prior = envoy.get(name)
+    envoy.set(name, value)
+    let loaded = settings.load()
+    case prior {
+      Ok(prior) -> envoy.set(name, prior)
+      Error(Nil) -> envoy.unset(name)
+    }
+    loaded
+  }
+  let names_both = fn(loaded) {
+    case loaded {
+      Error(message) ->
+        string.contains(message, "MCP_OAUTH_AUDIENCE")
+        && string.contains(message, "OIDC_AUDIENCE")
+      Ok(_) -> False
+    }
+  }
+  let assert True = names_both(load_with("MCP_OAUTH_AUDIENCE", config.oidc_audience))
+  let assert True = names_both(load_with("OIDC_AUDIENCE", settings.mcp_audience(config)))
+  let assert Ok(_) = load_with("OIDC_AUDIENCE", settings.mcp_audience(config) <> "/")
 }

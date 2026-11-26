@@ -27,6 +27,7 @@ import libarrie/domain/purge
 import libarrie/domain/quota
 import libarrie/domain/ratelimit
 import libarrie/domain/search
+import libarrie/domain/settings
 import libarrie/domain/transcripts
 import libarrie/domain/uploads
 import libarrie/integrations/storage
@@ -726,7 +727,7 @@ fn api_keys_page(
         views.api_keys_page(
           keys,
           created,
-          web.origin <> "/mcp",
+          web.origin <> settings.mcp_path,
           s.csrf_token,
           is_recent(s),
           error,

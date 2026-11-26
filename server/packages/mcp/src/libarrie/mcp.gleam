@@ -49,11 +49,12 @@ import libarrie/domain/notebooks.{type Notebook}
 import libarrie/domain/pages
 import libarrie/domain/ratelimit
 import libarrie/domain/search
+import libarrie/domain/settings
 import libarrie/integrations/identity
 import mist
 import youid/uuid
 
-pub const path = "/mcp"
+pub const path = settings.mcp_path
 
 const metadata_path = "/.well-known/oauth-protected-resource"
 
