@@ -32,6 +32,7 @@ pub type Notebook {
     deletion_batch_id: Option(String),
     created_at: String,
     updated_at: String,
+    private: Bool,
   )
 }
 
@@ -39,7 +40,7 @@ const select_notebook = "select n.id::text, n.name, n.description, n.color, n.ve
     n.numbering_revision,
     (select count(*)::int from pages p where p.notebook_id = n.id and p.visibility = 'active'),
     rfc3339(n.deleted_at), n.deletion_batch_id::text,
-    rfc3339(n.created_at), rfc3339(n.updated_at)
+    rfc3339(n.created_at), rfc3339(n.updated_at), n.private
   from notebooks n"
 
 fn decoder() -> decode.Decoder(Notebook) {
@@ -54,6 +55,7 @@ fn decoder() -> decode.Decoder(Notebook) {
   use deletion_batch_id <- decode.field(8, decode.optional(decode.string))
   use created_at <- decode.field(9, decode.string)
   use updated_at <- decode.field(10, decode.string)
+  use private <- decode.field(11, decode.bool)
   decode.success(Notebook(
     id:,
     name:,
@@ -66,6 +68,7 @@ fn decoder() -> decode.Decoder(Notebook) {
     deletion_batch_id:,
     created_at:,
     updated_at:,
+    private:,
   ))
 }
 
@@ -75,6 +78,7 @@ pub fn to_json(notebook: Notebook) -> json.Json {
     #("name", json.string(notebook.name)),
     #("description", json.string(notebook.description)),
     #("color", context.optional_string(notebook.color)),
+    #("private", json.bool(notebook.private)),
     #("version", json.int(notebook.version)),
     #("numbering_revision", json.int(notebook.numbering_revision)),
     #("page_count", json.int(notebook.page_count)),
@@ -180,7 +184,12 @@ pub fn list_trashed(
 }
 
 pub type NotebookInput {
-  NotebookInput(name: Option(String), description: Option(String), color: Option(String))
+  NotebookInput(
+    name: Option(String),
+    description: Option(String),
+    color: Option(String),
+    private: Option(Bool),
+  )
 }
 
 pub fn input_decoder() -> decode.Decoder(NotebookInput) {
@@ -191,7 +200,9 @@ pub fn input_decoder() -> decode.Decoder(NotebookInput) {
     decode.optional(decode.string),
   )
   use color <- decode.optional_field("color", None, decode.optional(decode.string))
-  decode.success(NotebookInput(name:, description:, color:))
+  // Omitted or null: false on create, unchanged on update.
+  use private <- decode.optional_field("private", None, decode.optional(decode.bool))
+  decode.success(NotebookInput(name:, description:, color:, private:))
 }
 
 fn validate(input: NotebookInput, require_name: Bool) -> Result(Nil, AppError) {
@@ -248,14 +259,15 @@ pub fn create(
   let id = uuid.v7_string()
   use _ <- db(database.execute(
     conn,
-    "insert into notebooks (id, account_id, name, description, color)
-     values ($1::uuid, $2::uuid, $3, $4, nullif($5, ''))",
+    "insert into notebooks (id, account_id, name, description, color, private)
+     values ($1::uuid, $2::uuid, $3, $4, nullif($5, ''), coalesce($6, false))",
     [
       database.text(id),
       database.text(account_id),
       database.text(string.trim(option.unwrap(input.name, ""))),
       database.text(option.unwrap(input.description, "")),
       database.nullable_text(input.color),
+      database.nullable_bool(input.private),
     ],
   ))
   use _ <- result.try(quota.adjust_usage(conn, account_id, 0, 0, 1))
@@ -283,6 +295,7 @@ pub fn update(
       tx,
       "update notebooks set name = coalesce($3, name),
          description = coalesce($4, description), color = case when $5 = '' then null else coalesce($5, color) end,
+         private = coalesce($6, private),
          version = version + 1, updated_at = now()
        where account_id = $1::uuid and id = $2::uuid",
       [
@@ -291,6 +304,7 @@ pub fn update(
         database.nullable_text(option.map(input.name, string.trim)),
         database.nullable_text(input.description),
         database.nullable_text(input.color),
+        database.nullable_bool(input.private),
       ],
     ))
     get(tx, account_id, notebook_id)

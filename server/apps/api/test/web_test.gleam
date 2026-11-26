@@ -268,6 +268,36 @@ pub fn search_page_highlights_matches_test() {
   let assert True = string.contains(results.body, "Searchable · Page 3")
 }
 
+pub fn search_page_hides_private_snippets_test() {
+  let app = support.app()
+  let subject = "web-" <> support.random_id()
+  let #(session, csrf) = sign_in(app, subject)
+  let token = support.token_for(subject, 0)
+  let open = support.notebook(app, token, "Searchable")
+  support.raise_limits(app, token)
+  let secret = support.notebook(app, token, "Secret")
+  let _ = support.upload_page(app, token, open, 3, Some("Lunch with Margaret Hamilton about Apollo"), "immediate")
+  let _ = support.upload_page(app, token, secret, 5, Some("Margaret Hamilton surprise party plans"), "immediate")
+  support.drain(app)
+  support.set_private(app, token, secret, True)
+  let results =
+    simulate.request(http.Post, "/search")
+    |> simulate.header("cookie", session)
+    |> simulate.header("origin", "http://localhost:8080")
+    |> simulate.header("hx-request", "true")
+    |> simulate.form_body([#("csrf_token", csrf), #("query", "hamilton"), #("notebook_id", "")])
+    |> send(app, _)
+  let assert 200 = results.status
+  // Both hits link to their pages; only the open one shows its text.
+  let assert True = string.contains(results.body, "Searchable · Page 3")
+  let assert True = string.contains(results.body, "Secret · Page 5")
+  let assert True = string.contains(results.body, "<mark>Hamilton</mark>")
+  let assert True =
+    string.contains(results.body, "Private notebook. The matching text isn&#39;t shown.")
+  let assert False = string.contains(results.body, "surprise")
+  let assert False = string.contains(results.body, "party")
+}
+
 pub fn v1_accepts_the_browser_session_with_csrf_test() {
   let app = support.app()
   let #(session, csrf) = sign_in(app, "web-" <> support.random_id())

@@ -223,24 +223,48 @@ pub fn by_number(
   Ok(page)
 }
 
-/// The selected transcript's text, or `None` before the page has one.
+pub type TranscriptText {
+  Transcribed(String)
+  NotTranscribed
+  /// The page is in a private notebook now, named here.
+  InPrivateNotebook(name: String)
+}
+
+/// The text of the transcript the lookup selected, unless the page's
+/// current notebook is private. One statement reads the flag and the text,
+/// so a privacy change or a move into a private notebook after the lookup
+/// is refused too (ADR 0017). Unlike the module's other reads, it doesn't
+/// filter by visibility or trash: the lookup already did, and a private
+/// flag counts whatever state its notebook is in now.
 pub fn transcript_text(
   conn: Connection,
   account_id: String,
   page: Page,
-) -> Result(Option(String), AppError) {
-  case page.transcript_revision_id {
-    None -> Ok(None)
-    Some(id) -> {
-      use text <- db(database.query_one(
-        conn,
-        "select text from transcript_revisions
-         where account_id = $1::uuid and id = $2::uuid",
-        [database.text(account_id), database.text(id)],
-        decode.at([0], decode.string),
-      ))
-      Ok(text)
-    }
+) -> Result(TranscriptText, AppError) {
+  use row <- db(database.query_one(
+    conn,
+    "select n.private, n.name, t.text
+     from pages p
+     join notebooks n on n.id = p.notebook_id
+     left join transcript_revisions t
+       on t.account_id = p.account_id and t.id = $3::uuid
+     where p.account_id = $1::uuid and p.id = $2::uuid",
+    [
+      database.text(account_id),
+      database.text(page.id),
+      database.nullable_text(page.transcript_revision_id),
+    ],
+    {
+      use private <- decode.field(0, decode.bool)
+      use name <- decode.field(1, decode.string)
+      use text <- decode.field(2, decode.optional(decode.string))
+      decode.success(#(private, name, text))
+    },
+  ))
+  case row {
+    Some(#(True, name, _)) -> Ok(InPrivateNotebook(name))
+    Some(#(False, _, Some(text))) -> Ok(Transcribed(text))
+    Some(#(False, _, None)) | None -> Ok(NotTranscribed)
   }
 }
 

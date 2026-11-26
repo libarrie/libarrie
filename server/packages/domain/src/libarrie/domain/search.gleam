@@ -7,6 +7,11 @@
 //// search over the release's configuration. Candidates merge with
 //// reciprocal rank fusion and aggregate to one result per page. Tenant,
 //// visibility and current-generation filters run in SQL before truncation.
+////
+//// Hits from a private notebook say where the text matched (the notebook,
+//// page and IDs) but carry no snippet and no highlights. The flag is read
+//// when each hit is built, not stored in the index, so a change applies
+//// from the next search without reindexing (ADR 0017).
 
 import gleam/dict
 import gleam/dynamic/decode
@@ -68,7 +73,8 @@ pub type Hit {
     notebook_id: String,
     notebook_name: String,
     page_number: Int,
-    snippet: String,
+    /// None for a page in a private notebook.
+    snippet: Option(String),
     match_kind: String,
   )
 }
@@ -351,12 +357,18 @@ fn hit(
   entry: Fused,
   query: String,
 ) -> Result(Hit, AppError) {
+  // The snippet's text comes from the candidate queries, and this statement
+  // reads the page's current notebook and its private flag after them. So
+  // text indexed after a privacy change can't go out with an older flag. A
+  // later change, such as batching these lookups, must not read the flags
+  // before the candidate queries (ADR 0017).
   use row <- error.found(database.query_one(
     tx,
     "select p.id::text, p.page_number, n.id::text, n.name, g.revision_id::text,
        g.transcript_revision_id::text, g.id::text,
        r.selected_transcript_revision_id is distinct from g.transcript_revision_id
-         or p.active_revision_id is distinct from g.revision_id
+         or p.active_revision_id is distinct from g.revision_id,
+       n.private
      from pages p
      join notebooks n on n.id = p.notebook_id
      join search_release_pages srp on srp.page_id = p.id and srp.release_id = $3::uuid
@@ -373,6 +385,7 @@ fn hit(
       use transcript_id <- decode.field(5, decode.string)
       use generation_id <- decode.field(6, decode.string)
       use pending <- decode.field(7, decode.bool)
+      use private <- decode.field(8, decode.bool)
       decode.success(#(
         page_id,
         number,
@@ -382,12 +395,26 @@ fn hit(
         transcript_id,
         generation_id,
         pending,
+        private,
       ))
     },
   ))
-  let #(page_id, number, notebook_id, notebook_name, revision_id, transcript_id, generation_id, pending) =
-    row
-  let snippet = text.snippet(entry.best.text, query, 240)
+  let #(
+    page_id,
+    number,
+    notebook_id,
+    notebook_name,
+    revision_id,
+    transcript_id,
+    generation_id,
+    pending,
+    private,
+  ) = row
+  // A private notebook's text is never built into a snippet.
+  let snippet = case private {
+    True -> None
+    False -> Some(text.snippet(entry.best.text, query, 240))
+  }
   let match_kind = case list.contains(entry.kinds, "lexical"), list.contains(entry.kinds, "semantic") {
     True, True -> "hybrid"
     True, False -> "lexical"
@@ -408,34 +435,45 @@ fn hit(
 }
 
 fn hit_json(hit: Hit, query: String) -> json.Json {
-  json.object([
-    #("page_id", json.string(hit.page_id)),
-    #("revision_id", json.string(hit.revision_id)),
-    #("transcript_revision_id", json.string(hit.transcript_revision_id)),
-    #("index_generation_id", json.string(hit.index_generation_id)),
-    #("indexing_pending", json.bool(hit.indexing_pending)),
-    #(
-      "notebook",
-      json.object([
-        #("id", json.string(hit.notebook_id)),
-        #("name", json.string(hit.notebook_name)),
-      ]),
-    ),
-    #("page_number", json.int(hit.page_number)),
-    // Evidence comes from the published generation, never attached to
-    // newer unindexed text.
-    #("snippet", json.string(hit.snippet)),
-    #(
-      "highlights",
-      json.array(text.highlights(hit.snippet, query), fn(range) {
-        json.object([
-          #("kind", json.string("text")),
-          #("field", json.string("snippet")),
-          #("start", json.int(range.0)),
-          #("end", json.int(range.1)),
-        ])
-      }),
-    ),
-    #("match_kind", json.string(hit.match_kind)),
-  ])
+  // Evidence comes from the published generation, never attached to
+  // newer unindexed text. A hit from a private notebook has no `snippet`
+  // or `highlights` key at all.
+  let evidence = case hit.snippet {
+    Some(snippet) -> [
+      #("snippet", json.string(snippet)),
+      #(
+        "highlights",
+        json.array(text.highlights(snippet, query), fn(range) {
+          json.object([
+            #("kind", json.string("text")),
+            #("field", json.string("snippet")),
+            #("start", json.int(range.0)),
+            #("end", json.int(range.1)),
+          ])
+        }),
+      ),
+    ]
+    None -> []
+  }
+  json.object(
+    list.flatten([
+      [
+        #("page_id", json.string(hit.page_id)),
+        #("revision_id", json.string(hit.revision_id)),
+        #("transcript_revision_id", json.string(hit.transcript_revision_id)),
+        #("index_generation_id", json.string(hit.index_generation_id)),
+        #("indexing_pending", json.bool(hit.indexing_pending)),
+        #(
+          "notebook",
+          json.object([
+            #("id", json.string(hit.notebook_id)),
+            #("name", json.string(hit.notebook_name)),
+          ]),
+        ),
+        #("page_number", json.int(hit.page_number)),
+      ],
+      evidence,
+      [#("match_kind", json.string(hit.match_kind))],
+    ]),
+  )
 }

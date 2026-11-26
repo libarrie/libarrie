@@ -217,6 +217,42 @@ pub fn notebook(app: router.App, token: String, name: String) -> String {
   str(r, ["id"])
 }
 
+/// The default limits allow one notebook per account. Call this before an
+/// account's second notebook.
+pub fn raise_limits(app: router.App, token: String) -> Nil {
+  let account = account_id(app, token)
+  let assert 200 =
+    internal(
+      app,
+      http.Put,
+      "/internal/v1/accounts/" <> account <> "/entitlements",
+      entitlement(1, 100, 5, 100, "lifetime", [], []),
+    ).status
+  Nil
+}
+
+/// Mark a notebook private, or not, through the API at its current version.
+pub fn set_private(
+  app: router.App,
+  token: String,
+  notebook_id: String,
+  private: Bool,
+) -> Nil {
+  let current = call(app, http.Get, "/v1/notebooks/" <> notebook_id, token, None, [])
+  let version = get(current, ["version"], decode.int)
+  let updated =
+    call(
+      app,
+      http.Patch,
+      "/v1/notebooks/" <> notebook_id,
+      token,
+      Some(json.object([#("private", json.bool(private))])),
+      [#("if-match", "\"v" <> int.to_string(version) <> "\"")],
+    )
+  let assert True = get(updated, ["private"], decode.bool) == private
+  Nil
+}
+
 pub fn png(text: Option(String)) -> BitArray {
   image.mock_png(640, 480, text)
 }

@@ -17,4 +17,6 @@ cd server && LIBARRIE_WRITE_FIXTURES=1 scripts/test.sh
 ```
 
 Changes must stay additive for older installed apps (section 11): add
-fields, don't rename or remove them.
+fields, don't rename or remove them. The one approved exception is ADR
+0017: search results from private notebooks omit `snippet` and
+`highlights` (`search_private.json`).

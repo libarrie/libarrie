@@ -11,6 +11,9 @@
 //// provider as the authorization server.
 ////
 //// Tools are read-only and see only the authenticated person's notes.
+//// Results from private notebooks have no snippet, and `get_text` refuses
+//// their pages. Their owner keeps that text from agents, so the tools ask
+//// agents not to piece it together from searches (ADR 0017).
 ////
 //// Sessions (2025-11-25 protocol) and tasks live in Postgres
 //// (gleam_mcp_postgres), so every API replica can serve every client and
@@ -18,6 +21,7 @@
 //// same secret, derived from SECRET_KEY_BASE.
 
 import gleam/bit_array
+import gleam/bool
 import gleam/bytes_tree
 import gleam/crypto
 import gleam/dict.{type Dict}
@@ -264,10 +268,16 @@ fn new_server(config: Config) -> Server {
   |> server.with_instructions(
     "Libarrie holds the user's handwritten notebooks as transcribed text. "
     <> "Use `search` to find pages, then `get_text` with the notebook and "
-    <> "page number from a result to read the whole page.",
+    <> "page number from a result to read the whole page. "
+    <> "Results from private notebooks have no snippet, and `get_text` refuses "
+    <> "their pages. Their owner keeps that text from agents, so don't use "
+    <> "searches to piece it together.",
   )
   |> server.with_identity_authorization("authorization", authenticate(config, _))
   |> server.with_allowed_origins(config.allowed_origins)
+  // Every tool or resource that returns note content (text, snippets or page
+  // images, including thumbnails and image URLs) must honor a notebook's
+  // `private` flag, and MCP never sets `private` or moves pages (ADR 0017).
   |> tool(
     "get_me",
     "Get Me",
@@ -279,7 +289,9 @@ fn new_server(config: Config) -> Server {
     "search",
     "Search Notes",
     "Search the user's notebooks for text, by words and by meaning. "
-      <> "Returns up to 10 matching pages with a snippet each.",
+      <> "Returns up to 10 matching pages with a snippet each. "
+      <> "Pages in private notebooks come without a snippet; don't use "
+      <> "searches to work out their text.",
     object_schema(
       [
         #("query", string_schema("What to look for.")),
@@ -297,7 +309,8 @@ fn new_server(config: Config) -> Server {
   |> tool(
     "get_text",
     "Get Page Text",
-    "Get the transcribed text of one page in a notebook.",
+    "Get the transcribed text of one page in a notebook. "
+      <> "Pages in private notebooks are refused.",
     object_schema(
       [
         #("notebook", string_schema("The notebook's name or ID.")),
@@ -459,6 +472,11 @@ fn search_tool(config: Config, user_id: String, arguments: Arguments) -> ToolRes
           "results",
           VArray(
             list.map(results.hits, fn(hit) {
+              // A hit from a private notebook says where, never the text.
+              let snippet = case hit.snippet {
+                Some(snippet) -> [#("snippet", VString(snippet))]
+                None -> []
+              }
               VObject([
                 #(
                   "notebook",
@@ -468,7 +486,7 @@ fn search_tool(config: Config, user_id: String, arguments: Arguments) -> ToolRes
                   ]),
                 ),
                 #("page", VInt(hit.page_number)),
-                #("snippet", VString(hit.snippet)),
+                ..snippet
               ])
             }),
           ),
@@ -485,6 +503,9 @@ fn get_text(config: Config, user_id: String, arguments: Arguments) -> ToolResult
     use principal <- result.try(readable(config, user_id))
     let account = principal.account_id
     use notebook <- result.try(resolve_notebook(config, account, notebook))
+    // Refused before the page lookup, so the answer is the same whether or
+    // not the page exists.
+    use <- bool.guard(notebook.private, Error(private_refusal(notebook.name)))
     use page <- result.try(
       pages.by_number(config.ctx.db, account, notebook.id, number)
       |> result.map_error(fn(e) {
@@ -501,12 +522,15 @@ fn get_text(config: Config, user_id: String, arguments: Arguments) -> ToolResult
         }
       }),
     )
+    // The text read checks the page's current notebook again, so a privacy
+    // change or a move into a private notebook since the lookup is refused.
     use text <- result.try(
       pages.transcript_text(config.ctx.db, account, page)
       |> result.map_error(message),
     )
     case text {
-      None ->
+      pages.InPrivateNotebook(name) -> Error(private_refusal(name))
+      pages.NotTranscribed ->
         Error(
           "Page "
           <> int.to_string(number)
@@ -514,7 +538,7 @@ fn get_text(config: Config, user_id: String, arguments: Arguments) -> ToolResult
           <> notebook.name
           <> "\" hasn't been transcribed yet. Try again later.",
         )
-      Some(text) ->
+      pages.Transcribed(text) ->
         Ok(#(
           text,
           VObject([
@@ -531,6 +555,17 @@ fn get_text(config: Config, user_id: String, arguments: Arguments) -> ToolResult
         ))
     }
   })
+}
+
+/// It states the owner's intent, because a helpful agent that's refused
+/// would otherwise try phrases in `search` to work the text out.
+fn private_refusal(name: String) -> String {
+  "\""
+  <> name
+  <> "\" is a private notebook, so its page text isn't available here. "
+  <> "Its owner doesn't want agents to see its text: tell the user it's "
+  <> "private rather than working out the text from searches. Search still "
+  <> "shows which of its pages match."
 }
 
 fn pages_phrase(count: Int) -> String {

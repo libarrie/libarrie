@@ -113,6 +113,70 @@ pub fn notebook_settings_and_colors_test() {
   let assert True = string.contains(trash.body, "Field notes 2026")
 }
 
+pub fn private_notebook_setting_test() {
+  let #(app, session, csrf, token, _) = setup("Field notes")
+  support.raise_limits(app, token)
+  // The create form shows the checkbox among its options, with the marker
+  // that makes the server read it.
+  let index = get(app, "/notebooks", session)
+  let assert Ok(#(_, form)) = string.split_once(index.body, "id=\"create-notebook\"")
+  let assert Ok(#(form, _)) = string.split_once(form, "</form>")
+  let assert True = string.contains(form, "Description, color and privacy")
+  let assert True = string.contains(form, "name=\"private\"")
+  let assert True = string.contains(form, "name=\"private_shown\"")
+  let created =
+    post(app, "/notebooks", session, csrf, [
+      #("name", "Diary"),
+      #("private_shown", "1"),
+      #("private", "true"),
+    ])
+  let assert 200 = created.status
+  let listed =
+    support.get(
+      support.call(app, http.Get, "/v1/notebooks", token, None, []),
+      ["notebooks"],
+      decode.list({
+        use id <- decode.field("id", decode.string)
+        use name <- decode.field("name", decode.string)
+        decode.success(#(name, id))
+      }),
+    )
+  let assert Ok(diary) = list.key_find(listed, "Diary")
+  let is_private = fn() {
+    support.get(
+      support.call(app, http.Get, "/v1/notebooks/" <> diary, token, None, []),
+      ["private"],
+      decode.bool,
+    )
+  }
+  let assert True = is_private()
+  let page = get(app, "/notebooks/" <> diary, session)
+  let assert True = string.contains(page.body, "checked name=\"private\"")
+  let assert True = string.contains(page.body, "name=\"private_shown\"")
+  // With the marker, an unchecked box clears the flag and a checked one
+  // sets it.
+  let edit = fn(fields) {
+    let version = hidden_value(get(app, "/notebooks/" <> diary, session).body, "version")
+    post(app, "/notebooks/" <> diary <> "/edit", session, csrf, [#("version", version), ..fields])
+  }
+  let assert 303 = edit([#("private_shown", "1")]).status
+  let assert False = is_private()
+  let assert 303 = edit([#("private_shown", "1"), #("private", "true")]).status
+  let assert True = is_private()
+  // A form without the control can't make the notebook public.
+  let assert 303 = edit([#("name", "Diary 2026")]).status
+  let assert True = is_private()
+  // A stale version is a conflict that leaves the flag alone.
+  let stale =
+    post(app, "/notebooks/" <> diary <> "/edit", session, csrf, [
+      #("version", "1"),
+      #("private_shown", "1"),
+    ])
+  let assert 412 = stale.status
+  let assert True = string.contains(stale.body, "changed since you opened the page")
+  let assert True = is_private()
+}
+
 pub fn renumber_and_move_pages_test() {
   let #(app, session, csrf, token, notebook) = setup("Numbers")
   // The default limits allow one notebook; this test needs two.

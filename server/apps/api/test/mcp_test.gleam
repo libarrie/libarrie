@@ -2,24 +2,29 @@
 //// port, driven by the gleam_mcp client and by plain HTTP.
 
 import gleam/dict
+import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http
 import gleam/http/request
 import gleam/http/response
 import gleam/httpc
 import gleam/int
+import gleam/json
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import gleam_mcp/actions
 import gleam_mcp/client
 import gleam_mcp/client/capabilities
 import gleam_mcp/client/transport
+import gleam_mcp/codec_value
 import gleam_mcp/jsonrpc.{type Value, VInt, VString}
 import libarrie/api/router
 import libarrie/domain/accounts
 import libarrie/domain/api_keys
 import libarrie/domain/moderation
+import libarrie/domain/notebooks
+import libarrie/domain/pages
 import libarrie/domain/settings
 import libarrie/integrations/identity
 import libarrie/mcp
@@ -102,6 +107,15 @@ fn challenge(resp: response.Response(String)) -> String {
 }
 
 fn connect(url: String, token: String, version: option.Option(String)) -> client.Client {
+  connect_with_info(url, token, version).0
+}
+
+/// Connect, keeping what the server said about itself.
+fn connect_with_info(
+  url: String,
+  token: String,
+  version: option.Option(String),
+) -> #(client.Client, client.ConnectionInfo) {
   let created =
     client.new(
       transport.Http(transport.HttpConfig(
@@ -124,8 +138,8 @@ fn connect(url: String, token: String, version: option.Option(String)) -> client
       website_url: None,
       icons: [],
     )
-  let assert Ok(#(connected, _)) = client.connect(created, info)
-  connected
+  let assert Ok(connection) = client.connect(created, info)
+  connection
 }
 
 fn call(
@@ -133,6 +147,16 @@ fn call(
   name: String,
   arguments: List(#(String, Value)),
 ) -> #(String, Bool) {
+  let #(text, _, is_error) = call_full(c, name, arguments)
+  #(text, is_error)
+}
+
+/// A tool's text, its structured content and whether it's an error.
+fn call_full(
+  c: client.Client,
+  name: String,
+  arguments: List(#(String, Value)),
+) -> #(String, Option(Value), Bool) {
   let #(_, outcome) =
     client.call_tool(
       c,
@@ -152,7 +176,7 @@ fn call(
       }
     })
     |> string.concat
-  #(text, result.is_error == Some(True))
+  #(text, result.structured_content, result.is_error == Some(True))
 }
 
 type Person {
@@ -229,6 +253,9 @@ pub fn an_agent_searches_and_reads_pages_with_an_api_key_test() {
   let c = connect(url, ada.key, None)
   let #(_, listed) = client.list_tools(c, None)
   let assert Ok(tools) = listed
+  // A new tool or resource that returns note content (text, snippets or page
+  // images, including thumbnails and image URLs) must honor `private` and
+  // needs a privacy test (ADR 0017).
   let assert ["get_me", "get_text", "search"] =
     list.map(tools.tools, fn(t) { t.name }) |> list.sort(string.compare)
   let assert #(me, False) = call(c, "get_me", [])
@@ -455,6 +482,159 @@ pub fn api_verifier_checks_the_oidc_audience_test() {
     )
   let assert Ok(verifier) = libarrie_api.verifier(cfg)
   let assert True = verifier.audience == cfg.oidc_audience
+}
+
+/// Each search result's notebook ID, notebook name, page, snippet and keys.
+fn search_results(
+  structured: Option(Value),
+) -> List(#(String, String, Int, Option(String), List(String))) {
+  let assert Some(value) = structured
+  let assert Ok(results) =
+    json.parse(
+      codec_value.to_json(value) |> json.to_string,
+      decode.at(
+        ["results"],
+        decode.list({
+          use id <- decode.subfield(["notebook", "id"], decode.string)
+          use name <- decode.subfield(["notebook", "name"], decode.string)
+          use page <- decode.field("page", decode.int)
+          // Absent, never null: null fails this decoder.
+          use snippet <- decode.optional_field("snippet", None, decode.map(decode.string, Some))
+          use all <- decode.then(decode.dict(decode.string, decode.dynamic))
+          decode.success(#(id, name, page, snippet, dict.keys(all) |> list.sort(string.compare)))
+        }),
+      ),
+    )
+  results
+}
+
+fn instructions(info: client.ConnectionInfo) -> String {
+  case info {
+    client.Modern(result) -> result.instructions
+    client.Legacy(result) -> result.instructions
+  }
+  |> option.unwrap("")
+}
+
+pub fn private_notebooks_hide_text_from_agents_test() {
+  let app = support.app()
+  let url = serve(app, oauth_config(app))
+  let ada = person_with_notes(app)
+  support.raise_limits(app, ada.token)
+  let journal = support.notebook(app, ada.token, "Journal")
+  let #(_, _) =
+    support.upload_page(app, ada.token, journal, 2, Some("Grace Hopper secret recipe"), "immediate")
+  support.drain(app)
+  support.set_private(app, ada.token, journal, True)
+  let #(c, info) = connect_with_info(url, ada.key, None)
+  let private_entry = fn(results) {
+    list.find(results, fn(r: #(String, String, Int, Option(String), List(String))) {
+      r.0 == journal
+    })
+  }
+
+  // Search says where a private page matched, in the structured content and
+  // the text block alike, whether or not the notebook argument names it.
+  list.each(
+    [
+      [#("query", VString("Hopper"))],
+      [#("query", VString("Hopper")), #("notebook", VString("Journal"))],
+      [#("query", VString("Hopper")), #("notebook", VString(journal))],
+    ],
+    fn(arguments) {
+      let assert #(text, structured, False) = call_full(c, "search", arguments)
+      let results = search_results(structured)
+      let assert Ok(#(_, "Journal", 2, None, ["notebook", "page"])) = private_entry(results)
+      let assert False = string.contains(text, "recipe")
+      let assert True = string.contains(text, journal)
+      let assert True = string.contains(text, "\"name\":\"Journal\"")
+      let assert True = string.contains(text, "\"page\":2")
+    },
+  )
+  // The other notebook keeps its snippets.
+  let assert #(_, structured, False) = call_full(c, "search", [#("query", VString("Hopper"))])
+  let assert Ok(#(_, "Field Notes", 1, Some(snippet), _)) =
+    list.find(search_results(structured), fn(r) { r.1 == "Field Notes" })
+  let assert True = string.contains(snippet, "Hopper")
+
+  // get_text refuses, by name or ID, whether or not the page exists.
+  list.each(
+    [
+      [#("notebook", VString("Journal")), #("page", VInt(2))],
+      [#("notebook", VString(journal)), #("page", VInt(2))],
+      [#("notebook", VString("Journal")), #("page", VInt(9))],
+    ],
+    fn(arguments) {
+      let assert #(text, True) = call(c, "get_text", arguments)
+      let assert True = string.contains(text, "private")
+      let assert False = string.contains(text, "recipe")
+      let assert False = string.contains(text, "has no page")
+    },
+  )
+
+  // Toggling applies to the next call, both ways.
+  support.set_private(app, ada.token, journal, False)
+  let assert #(_, structured, False) = call_full(c, "search", [#("query", VString("Hopper"))])
+  let assert Ok(#(_, _, 2, Some(snippet), _)) = private_entry(search_results(structured))
+  let assert True = string.contains(snippet, "recipe")
+  let assert #(text, False) =
+    call(c, "get_text", [#("notebook", VString("Journal")), #("page", VInt(2))])
+  let assert "Grace Hopper secret recipe" = text
+  support.set_private(app, ada.token, journal, True)
+  let assert #(text, structured, False) = call_full(c, "search", [#("query", VString("Hopper"))])
+  let assert Ok(#(_, _, 2, None, _)) = private_entry(search_results(structured))
+  let assert False = string.contains(text, "recipe")
+  let assert #(text, True) =
+    call(c, "get_text", [#("notebook", VString("Journal")), #("page", VInt(2))])
+  let assert False = string.contains(text, "recipe")
+
+  // The tools and the server instructions tell agents.
+  let #(_, listed) = client.list_tools(c, None)
+  let assert Ok(tools) = listed
+  list.each(["search", "get_text"], fn(name) {
+    let assert Ok(tool) = list.find(tools.tools, fn(t) { t.name == name })
+    let assert Some(description) = tool.description
+    let assert True = string.contains(description, "private notebooks")
+  })
+  let assert True = string.contains(instructions(info), "private notebooks")
+}
+
+/// `get_text` reads the text and the page's current notebook in one
+/// statement, so a change between its page lookup and its read is refused.
+/// The page here is looked up before each change.
+pub fn transcript_text_rechecks_privacy_test() {
+  let app = support.app()
+  let ada = person_with_notes(app)
+  let db = app.ctx.db
+  let account = support.account_id(app, ada.token)
+  let assert Ok([field_notes]) = notebooks.named(db, account, "Field Notes")
+  let assert Ok(page) = pages.by_number(db, account, field_notes.id, 1)
+  let assert Ok(pages.Transcribed("Met Grace Hopper about the compiler budget")) =
+    pages.transcript_text(db, account, page)
+  support.raise_limits(app, ada.token)
+  let journal = support.notebook(app, ada.token, "Journal")
+  support.set_private(app, ada.token, journal, True)
+  // Made private after the lookup.
+  support.set_private(app, ada.token, field_notes.id, True)
+  let assert Ok(pages.InPrivateNotebook("Field Notes")) = pages.transcript_text(db, account, page)
+  support.set_private(app, ada.token, field_notes.id, False)
+  // Moved into a private notebook after the lookup.
+  let detail = support.call(app, http.Get, "/v1/pages/" <> ada.page_id, ada.token, None, [])
+  let version = support.get(detail, ["page", "version"], decode.int)
+  let assert 200 =
+    support.call(
+      app,
+      http.Patch,
+      "/v1/pages/" <> ada.page_id,
+      ada.token,
+      Some(json.object([#("notebook_id", json.string(journal))])),
+      [#("if-match", "\"v" <> int.to_string(version) <> "\"")],
+    ).status
+  let assert Ok(pages.InPrivateNotebook("Journal")) = pages.transcript_text(db, account, page)
+  // A page without a transcript yet, in a public notebook.
+  let #(_, _) = support.upload_page(app, ada.token, field_notes.id, 2, Some("Not read yet"), "immediate")
+  let assert Ok(fresh) = pages.by_number(db, account, field_notes.id, 2)
+  let assert Ok(pages.NotTranscribed) = pages.transcript_text(db, account, fresh)
 }
 
 pub fn people_manage_api_keys_in_settings_test() {

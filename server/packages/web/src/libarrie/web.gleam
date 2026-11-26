@@ -142,6 +142,16 @@ fn form_field(form: wisp.FormData, name: String) -> Option(String) {
   list.key_find(form.values, name) |> option.from_result
 }
 
+/// A notebook form's private flag. Only a form that shows the checkbox
+/// posts the `private_shown` marker. Without it the flag is left out, so a
+/// form without the control can't make a notebook public.
+fn form_private(form: wisp.FormData) -> Option(Bool) {
+  case form_field(form, "private_shown") {
+    Some(_) -> Some(form_field(form, "private") == Some("true"))
+    None -> None
+  }
+}
+
 fn forbidden(web: Web, req: wisp.Request) -> wisp.Response {
   ui.page(web, req, shell(req, "Forbidden", None, ""), [
     ui.alert("danger", "This request could not be verified. Reload the page and try again."),
@@ -194,6 +204,7 @@ fn route(web: Web, req: wisp.Request, s: Session) -> wisp.Response {
           name: form_field(form, "name"),
           description: form_field(form, "description"),
           color: form_field(form, "color"),
+          private: form_private(form),
         )
       case
         context.transaction(web.ctx, fn(tx) {
@@ -235,6 +246,7 @@ fn route(web: Web, req: wisp.Request, s: Session) -> wisp.Response {
           name: form_field(form, "name"),
           description: form_field(form, "description"),
           color: form_field(form, "color"),
+          private: form_private(form),
         )
       case notebooks.update(web.ctx, account, id, form_int(form, "version"), input) {
         Ok(_) -> ui.redirect(web, req, "/notebooks/" <> id <> "?done=notebook_saved")
@@ -1107,8 +1119,9 @@ fn run_search(web: Web, req: wisp.Request, s: Session, form: wisp.FormData) -> w
           use page_id <- decode.field("page_id", decode.string)
           use name <- decode.subfield(["notebook", "name"], decode.string)
           use number <- decode.field("page_number", decode.int)
-          use snippet <- decode.field("snippet", decode.string)
-          use highlights <- decode.field("highlights", decode.list({
+          // Hits from private notebooks have no snippet or highlights.
+          use snippet <- decode.optional_field("snippet", None, decode.optional(decode.string))
+          use highlights <- decode.optional_field("highlights", [], decode.list({
             use start <- decode.field("start", decode.int)
             use end <- decode.field("end", decode.int)
             decode.success(#(start, end))
