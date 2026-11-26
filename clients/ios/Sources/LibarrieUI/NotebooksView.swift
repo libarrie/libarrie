@@ -2,14 +2,18 @@ import LibarrieKit
 import Observation
 import SwiftUI
 
-/// Create or edit a notebook's name, description and color.
+/// Create or edit a notebook's name, description, color and privacy.
 @MainActor @Observable final class NotebookEditor: Identifiable {
     let id = UUID()
     let editing: Notebook?
     var name: String
     var description: String
     var color: String
+    /// Starts from the saved flag, so a save that only renames keeps it.
+    var isPrivate: Bool
     var error: String?
+    /// Set by a save that succeeded but didn't make the notebook private.
+    var notice: String?
     var saving = false
 
     init(editing: Notebook?) {
@@ -17,9 +21,24 @@ import SwiftUI
         name = editing?.name ?? ""
         description = editing?.description ?? ""
         color = editing?.color?.lowercased() ?? ""
+        isPrivate = editing?.private ?? false
     }
 
     var canSave: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && name.count <= 200 && !saving }
+
+    /// The request this editor saves.
+    var input: APIClient.NotebookInput {
+        APIClient.NotebookInput(
+            name: name.trimmingCharacters(in: .whitespaces), description: description, color: color, private: isPrivate)
+    }
+
+    /// A server older than private notebooks ignores the flag but saves the
+    /// rest, so a save that asked for private and got back a notebook that
+    /// isn't says so.
+    static func privacyNotice(sent: APIClient.NotebookInput, saved: Notebook) -> String? {
+        guard sent.private == true, saved.private != true else { return nil }
+        return "Saved, but this server doesn't support private notebooks yet, so \"\(saved.name)\" isn't private."
+    }
 }
 
 @MainActor @Observable final class NotebooksModel {
@@ -27,6 +46,8 @@ import SwiftUI
     var notebooks: [Notebook] = []
     var loading = false
     var error: String?
+    /// A warning from the last save, shown until the next successful load.
+    var notice: String?
     var editor: NotebookEditor?
 
     init(app: AppModel) { self.app = app }
@@ -45,6 +66,7 @@ import SwiftUI
             } while cursor != nil
             notebooks = all
             error = nil
+            notice = nil
         } catch {
             self.error = describe(error)
         }
@@ -54,14 +76,16 @@ import SwiftUI
         guard let api = app.services?.api else { return false }
         editor.saving = true
         defer { editor.saving = false }
-        let input = APIClient.NotebookInput(
-            name: editor.name.trimmingCharacters(in: .whitespaces), description: editor.description, color: editor.color)
+        let input = editor.input
         do {
+            let saved: Notebook
             if let existing = editor.editing {
-                _ = try await api.updateNotebook(existing.id, version: existing.version, input)
+                saved = try await api.updateNotebook(existing.id, version: existing.version, input)
             } else {
-                _ = try await api.createNotebook(input)
+                saved = try await api.createNotebook(input)
             }
+            // The save went through, so the editor closes either way.
+            editor.notice = NotebookEditor.privacyNotice(sent: input, saved: saved)
             await load()
             return true
         } catch let error as APIError where error.code == "version_conflict" {
@@ -82,6 +106,7 @@ struct NotebooksView: View {
     var body: some View {
         List {
             if let error = model.error { Banner(kind: .danger, text: error).listRowSeparator(.hidden) }
+            if let notice = model.notice { Banner(kind: .warning, text: notice).listRowSeparator(.hidden) }
             if model.notebooks.isEmpty && !model.loading {
                 ContentUnavailableView("No notebooks yet", systemImage: "book.closed",
                                        description: Text("Create a notebook, then photograph its pages."))
@@ -114,7 +139,12 @@ struct NotebooksView: View {
             }
         }
         .sheet(item: Binding(get: { model.editor }, set: { model.editor = $0 })) { editor in
-            NotebookEditorView(editor: editor) { await model.save(editor) }
+            NotebookEditorView(editor: editor) {
+                let saved = await model.save(editor)
+                // After save's own reload, so that reload can't clear it.
+                if saved { model.notice = editor.notice }
+                return saved
+            }
         }
     }
 }
@@ -144,6 +174,13 @@ struct NotebookEditorView: View {
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
+                }
+                Section {
+                    Toggle("Private notebook", isOn: $editor.isPrivate)
+                } header: {
+                    Text("Privacy")
+                } footer: {
+                    Text("Searches, including an AI agent's, show which of its pages match, but not the matching text. AI agents connected to Libarrie can't open its pages. Anything that uses your own sign-in, such as an assistant in your browser, still can. Libarrie still sends its pages to the AI services that transcribe them and make them searchable.")
                 }
             }
             .navigationTitle(editor.editing == nil ? "New notebook" : "Edit notebook")

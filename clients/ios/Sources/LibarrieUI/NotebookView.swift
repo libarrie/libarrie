@@ -181,7 +181,10 @@ struct NotebookView: View {
         .sheet(item: Binding(get: { model.editor }, set: { model.editor = $0 })) { editor in
             NotebookEditorView(editor: editor) {
                 let saved = await navigator.notebooks.save(editor)
-                if saved { await model.load() }
+                if saved {
+                    await model.load()
+                    if let notice = editor.notice { model.message = (.warning, notice) }
+                }
                 return saved
             }
         }

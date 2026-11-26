@@ -152,8 +152,11 @@ public final class APIClient: Sendable {
         public var description: String?
         /// `#RRGGBB`; an empty string clears the color.
         public var color: String?
-        public init(name: String? = nil, description: String? = nil, color: String? = nil) {
-            self.name = name; self.description = description; self.color = color
+        /// Nil is left out: false on create, unchanged on update. It has no
+        /// default, so every caller chooses, and a rename can't drop it.
+        public var `private`: Bool?
+        public init(name: String? = nil, description: String? = nil, color: String? = nil, private isPrivate: Bool?) {
+            self.name = name; self.description = description; self.color = color; self.private = isPrivate
         }
     }
 

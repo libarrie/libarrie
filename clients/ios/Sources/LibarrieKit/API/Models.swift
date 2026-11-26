@@ -104,6 +104,10 @@ public struct Notebook: Codable, Sendable, Equatable, Identifiable, Hashable {
     public var name: String
     public var description: String
     public var color: String?
+    /// Searches show where its pages match, never the text (ADR 0017). A
+    /// server older than private notebooks sends none, and nil reads as not
+    /// private.
+    public var `private`: Bool?
     public var version: Int
     public var numberingRevision: Int
     public var pageCount: Int
@@ -235,8 +239,9 @@ public struct SearchHit: Codable, Sendable, Equatable, Identifiable {
     public var pageId: String
     public var notebook: NotebookRef
     public var pageNumber: Int
-    public var snippet: String
-    public var highlights: [Highlight]
+    /// Absent, with `highlights`, for a page in a private notebook.
+    public var snippet: String?
+    public var highlights: [Highlight]?
     public var matchKind: String
     public var indexingPending: Bool
     public var id: String { pageId }
