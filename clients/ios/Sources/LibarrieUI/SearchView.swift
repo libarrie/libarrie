@@ -32,12 +32,14 @@ import SwiftUI
         }
     }
 
-    /// The snippet with matches highlighted (offsets are in graphemes).
-    static func highlighted(_ hit: SearchHit) -> AttributedString {
-        let characters = Array(hit.snippet)
+    /// The snippet with matches highlighted (offsets are in graphemes), or nil
+    /// for a hit from a private notebook, which has no snippet.
+    static func highlighted(_ hit: SearchHit) -> AttributedString? {
+        guard let snippet = hit.snippet else { return nil }
+        let characters = Array(snippet)
         var result = AttributedString()
         var position = 0
-        for range in hit.highlights.sorted(by: { $0.start < $1.start })
+        for range in (hit.highlights ?? []).sorted(by: { $0.start < $1.start })
         where range.start >= position && range.end <= characters.count && range.end > range.start {
             result += AttributedString(String(characters[position..<range.start]))
             var match = AttributedString(String(characters[range.start..<range.end]))
@@ -72,7 +74,11 @@ struct SearchView: View {
                     NavigationLink(value: Route.page(hit.pageId)) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("\(hit.notebook.name) · Page \(hit.pageNumber)").font(.headline)
-                            Text(SearchModel.highlighted(hit)).font(.callout)
+                            if let snippet = SearchModel.highlighted(hit) {
+                                Text(snippet).font(.callout)
+                            } else {
+                                Text("Private notebook. The matching text isn't shown.").font(.caption).foregroundStyle(Brand.textMuted)
+                            }
                             if hit.indexingPending {
                                 Text("This page was edited since it was indexed.").font(.caption).foregroundStyle(Brand.textMuted)
                             }

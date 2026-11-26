@@ -29,7 +29,8 @@ import Testing
     @Test func notebooksAndPages() throws {
         let list = try decode(NotebookList.self, "notebook_list")
         #expect(list.notebooks.first?.name == "Blue work notebook")
-        _ = try decode(Notebook.self, "notebook")
+        #expect(list.notebooks.first?.private == false)
+        #expect(try decode(Notebook.self, "notebook").private == false)
         let pages = try decode(PageList.self, "page_list")
         #expect(pages.pages.first?.pageNumber == 1)
         let detail = try decode(PageDetail.self, "page_detail")
@@ -53,12 +54,36 @@ import Testing
 
     @Test func searchAndExports() throws {
         let search = try decode(SearchResponse.self, "search")
-        #expect(search.results.first?.highlights.first?.start == 10)
+        #expect(search.results.first?.highlights?.first?.start == 10)
+        // A hit from a private notebook says where, without the text.
+        let hidden = try #require(try decode(SearchResponse.self, "search_private").results.first)
+        #expect(hidden.snippet == nil)
+        #expect(hidden.highlights == nil)
+        #expect(hidden.notebook.name == "Blue work notebook")
+        #expect(hidden.pageNumber == 1)
         let exports = try decode(ExportList.self, "export_list")
         #expect(exports.exports.first?.state == "completed")
         let detail = try decode(ExportDetail.self, "export_detail")
         #expect(detail.parts.first?.downloadable == true)
         _ = try decode(ExportCreated.self, "export_created")
+    }
+
+    @Test func notebooksFromOlderServers() throws {
+        // A server older than private notebooks sends no `private`.
+        let object: [String: Any] = [
+            "id": "n", "name": "Work", "description": "", "color": NSNull(), "version": 1,
+            "numbering_revision": 1, "page_count": 0, "deleted_at": NSNull(),
+        ]
+        let notebook = try JSON.decoder.decode(Notebook.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(notebook.private == nil)
+    }
+
+    @Test func notebookInputKeys() throws {
+        // The server reads `private`; a key such as `is_private` would be ignored.
+        let set = try JSON.encoder.encode(APIClient.NotebookInput(private: true))
+        #expect(String(decoding: set, as: UTF8.self) == #"{"private":true}"#)
+        let unset = try JSON.encoder.encode(APIClient.NotebookInput(name: "x", private: nil))
+        #expect(String(decoding: unset, as: UTF8.self) == #"{"name":"x"}"#)
     }
 
     @Test func errors() throws {
