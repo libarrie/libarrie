@@ -115,8 +115,25 @@ class ApiClient(val baseUrl: String, private val http: OkHttpClient, private val
 
     // Notebooks ----------------------------------------------------------------------------
 
-    /** `color` is `#RRGGBB`; an empty string clears it. */
-    @Serializable data class NotebookInput(val name: String? = null, val description: String? = null, val color: String? = null)
+    /**
+     * `color` is `#RRGGBB`; an empty string clears it. A null `private` is
+     * left out: false on create, unchanged on update. It has no default, so
+     * every caller chooses, and a rename can't drop it.
+     */
+    @Serializable
+    data class NotebookInput(
+        val name: String? = null,
+        val description: String? = null,
+        val color: String? = null,
+        val private: Boolean?,
+    ) {
+        /**
+         * False when this asked for a private notebook and the saved one
+         * isn't, as from a server older than private notebooks, which
+         * ignores the flag but saves the rest.
+         */
+        fun privacyConfirmedBy(saved: Notebook): Boolean = this.private != true || saved.private
+    }
 
     suspend fun notebooks(cursor: String? = null): NotebookList =
         send("GET", "/v1/notebooks", query = cursor?.let { mapOf("cursor" to it) } ?: emptyMap())

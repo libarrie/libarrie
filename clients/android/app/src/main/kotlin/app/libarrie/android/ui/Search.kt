@@ -88,9 +88,13 @@ fun graphemes(text: String): List<String> {
     return result
 }
 
-/** The snippet with matches highlighted (offsets are in graphemes). */
-fun highlighted(hit: SearchHit, background: androidx.compose.ui.graphics.Color, foreground: androidx.compose.ui.graphics.Color): AnnotatedString {
-    val characters = graphemes(hit.snippet)
+/**
+ * The snippet with matches highlighted (offsets are in graphemes), or null
+ * for a hit from a private notebook, which has no snippet.
+ */
+fun highlighted(hit: SearchHit, background: androidx.compose.ui.graphics.Color, foreground: androidx.compose.ui.graphics.Color): AnnotatedString? {
+    val snippet = hit.snippet ?: return null
+    val characters = graphemes(snippet)
     var position = 0
     return buildAnnotatedString {
         for (range in hit.highlights.sortedBy { it.start }) {
@@ -140,7 +144,12 @@ fun SearchScreen(container: AppContainer, nav: NavController) {
                 items(response.results, key = { it.pageId }) { hit ->
                     Column(Modifier.fillMaxWidth().clickable { nav.navigate(Routes.page(hit.pageId)) }.padding(vertical = 4.dp)) {
                         Text("${hit.notebook.name} · Page ${hit.pageNumber}", style = MaterialTheme.typography.titleSmall)
-                        Text(highlighted(hit, brand.highlight, brand.onHighlight), style = MaterialTheme.typography.bodyMedium)
+                        val snippet = highlighted(hit, brand.highlight, brand.onHighlight)
+                        if (snippet != null) {
+                            Text(snippet, style = MaterialTheme.typography.bodyMedium)
+                        } else {
+                            Text("Private notebook. The matching text isn't shown.", style = MaterialTheme.typography.bodySmall, color = brand.textMuted)
+                        }
                         if (hit.indexingPending) Text("This page was edited since it was indexed.", style = MaterialTheme.typography.bodySmall, color = brand.textMuted)
                     }
                     HorizontalDivider()
