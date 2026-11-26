@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -32,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -56,20 +58,38 @@ import app.libarrie.android.AppContainer
 import app.libarrie.core.api.ApiClient
 import app.libarrie.core.api.ApiError
 import app.libarrie.core.api.Notebook
+import app.libarrie.core.api.NotebookDraft
 import app.libarrie.core.api.Numbering
 import app.libarrie.core.api.Page
 import app.libarrie.core.cache.ImageCache
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** Create or edit a notebook's name, description and color. */
+/**
+ * Create or edit a notebook's name, description, color and privacy. The
+ * fields live in one [NotebookDraft], which `core` tests: it starts from the
+ * notebook being edited and builds the request a save sends.
+ */
 class NotebookEditor(val editing: Notebook?) {
-    var name by mutableStateOf(editing?.name ?: "")
-    var description by mutableStateOf(editing?.description ?: "")
-    var color by mutableStateOf(editing?.color?.lowercase() ?: "")
+    var draft by mutableStateOf(NotebookDraft.of(editing))
+    var name: String
+        get() = draft.name
+        set(value) { draft = draft.copy(name = value) }
+    var description: String
+        get() = draft.description
+        set(value) { draft = draft.copy(description = value) }
+    var color: String
+        get() = draft.color
+        set(value) { draft = draft.copy(color = value) }
+    var isPrivate: Boolean
+        get() = draft.isPrivate
+        set(value) { draft = draft.copy(isPrivate = value) }
     var error by mutableStateOf<String?>(null)
+    /** Set by a save that succeeded but didn't make the notebook private. */
+    var notice by mutableStateOf<String?>(null)
     var saving by mutableStateOf(false)
     val canSave get() = name.isNotBlank() && name.length <= 200 && !saving
+    fun input() = draft.input()
 }
 
 class NotebooksViewModel(private val container: AppContainer) : ViewModel() {
@@ -91,16 +111,26 @@ class NotebooksViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    suspend fun save(editor: NotebookEditor): Boolean = saveNotebook(container, editor).also { if (it) load() }
+    suspend fun save(editor: NotebookEditor): Boolean {
+        if (!saveNotebook(container, editor)) return false
+        // A successful load clears the message, so show the notice after it.
+        load().join()
+        editor.notice?.let { message = StatusInfo.Kind.Warning to it }
+        return true
+    }
 }
 
 suspend fun saveNotebook(container: AppContainer, editor: NotebookEditor): Boolean {
     val api = container.services?.api ?: return false
     editor.saving = true
     try {
-        val input = ApiClient.NotebookInput(editor.name.trim(), editor.description, editor.color)
+        val input = editor.input()
         val existing = editor.editing
-        if (existing != null) api.updateNotebook(existing.id, existing.version, input) else api.createNotebook(input)
+        val saved = if (existing != null) api.updateNotebook(existing.id, existing.version, input) else api.createNotebook(input)
+        // The save went through, so the editor closes either way.
+        if (!input.privacyConfirmedBy(saved)) {
+            editor.notice = "Saved, but this server doesn't support private notebooks yet, so \"${saved.name}\" isn't private."
+        }
         return true
     } catch (e: ApiError) {
         editor.error = when (e.code) {
@@ -183,6 +213,22 @@ fun NotebookEditorDialog(editor: NotebookEditor, onDismiss: () -> Unit, onSave: 
                         NotebookDot(hex.ifEmpty { null })
                         Text(label)
                     }
+                }
+                item { Text("Privacy", style = MaterialTheme.typography.titleSmall) }
+                item {
+                    Row(
+                        Modifier.fillMaxWidth().toggleable(editor.isPrivate, role = Role.Switch) { editor.isPrivate = it },
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Private notebook", Modifier.weight(1f))
+                        Switch(checked = editor.isPrivate, onCheckedChange = null)
+                    }
+                }
+                item {
+                    Text(
+                        "Searches, including an AI agent's, show which of its pages match, but not the matching text. AI agents connected to Libarrie can't open its pages. Anything that uses your own sign-in, such as an assistant in your browser, still can. Libarrie still sends its pages to the AI services that transcribe them and make them searchable.",
+                        style = MaterialTheme.typography.bodySmall, color = LocalBrand.current.textMuted,
+                    )
                 }
             }
         },
@@ -299,7 +345,13 @@ class NotebookViewModel(private val container: AppContainer, val id: String) : V
         }
     }
 
-    suspend fun saveEditor(editor: NotebookEditor) = saveNotebook(container, editor).also { if (it) load() }
+    suspend fun saveEditor(editor: NotebookEditor) = saveNotebook(container, editor).also { saved ->
+        if (saved) {
+            load()
+            // This screen's load sets the message only on errors.
+            editor.notice?.let { message = StatusInfo.Kind.Warning to it }
+        }
+    }
 }
 
 @Composable

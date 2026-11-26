@@ -99,6 +99,11 @@ data class Notebook(
     val numberingRevision: Int,
     val pageCount: Int,
     val deletedAt: String? = null,
+    /**
+     * Searches show where its pages match, never the text (ADR 0017). A
+     * server older than private notebooks sends none, which reads as false.
+     */
+    val private: Boolean = false,
 )
 
 @Serializable data class NotebookList(val notebooks: List<Notebook>, val nextCursor: String? = null)
@@ -169,8 +174,9 @@ data class SearchHit(
     val pageId: String,
     val notebook: NotebookRef,
     val pageNumber: Int,
-    val snippet: String,
-    val highlights: List<Highlight>,
+    /** Absent, with [highlights], for a page in a private notebook. */
+    val snippet: String? = null,
+    val highlights: List<Highlight> = emptyList(),
     val matchKind: String,
     val indexingPending: Boolean = false,
 ) {
