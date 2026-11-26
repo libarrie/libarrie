@@ -100,4 +100,16 @@ account lifecycle changes made after the database recovery point.
      and left hidden), and newer account lifecycle revisions win (a
      cancellation after the recovery point defeats an old deadline).
    - It is idempotent; running it twice replays nothing the second time.
-5. Review any `CONFLICT` lines, then start the worker and API.
+5. Block `/mcp` in front of the API, and check the block, before the API
+   starts (ADR 0017). Privacy changes and page moves made after the
+   recovery point aren't in the journal, so agents must not reach the
+   restored notebooks until owners have re-checked them. Answer `/mcp` with
+   503 and the body `MCP is paused.`, as `docs/self-hosting.md` (Compose)
+   or "Blocking `/mcp`" in `deploy/helm/libarrie/README.md` describes. Only
+   that response confirms the block: a 401 with a `WWW-Authenticate` header
+   comes from the MCP server.
+6. Review any `CONFLICT` lines, then start the worker and API.
+7. Tell account owners the recovery point. Ask them to re-check which
+   notebooks are private, to move again any pages they moved after it, and
+   to revoke again any API key they revoked after it, because revoking
+   records no journal intent. Unblock `/mcp` once they have.

@@ -106,7 +106,7 @@ first sign-in.
 | `mode` | `selfhost` | `hosted` adds stricter startup checks |
 | `owner` | — | A sign-in subject made an owner when it signs in |
 | `oidc.audience`, `oidc.nativeClientId`, `oidc.nativeRedirectUri` | — | The iOS and Android apps |
-| `mcp.oauthAudience`, `mcp.oauthScopes` | `<origin>/mcp`, none | Agents signing in to the MCP server with OAuth |
+| `mcp.oauthAudience`, `mcp.oauthScopes` | `<origin>/mcp`, none | Agents signing in to the MCP server with OAuth. `mcp.oauthAudience` must differ from `oidc.audience`; Libarrie refuses to start otherwise |
 | `journal.*` | the primary store | A separate store for the lifecycle journal |
 | `spend.*`, `limits.*` | $5/account and $50/day; unlimited | Provider spending ceilings and per-account limits |
 | `decoder.sandbox` | `unprivileged` | `minijail` needs `CAP_SYS_ADMIN` or a pod user namespace |
@@ -149,6 +149,14 @@ worker. Pods also restart when their configuration changes. Take a database
 backup before upgrading. A failed migration Job stays for
 `kubectl logs job/libarrie-migrate`.
 
+Before going back to a release from before private notebooks, whether with
+`helm rollback` or by upgrading to an older release, apply the block from
+"Blocking `/mcp`" below and check it. An older release ignores the flag, so
+it would give agents the text of private notebooks. A block set through the
+release's values wouldn't survive, because `helm rollback` re-applies the
+older chart and values, Ingress included. Keep the block until a release
+with private notebooks is back (ADR 0017).
+
 ## Operator commands
 
 The API image runs one-off commands (see "Commands" in `server/README.md`).
@@ -176,6 +184,79 @@ spec:
 
 After restoring a database backup, run `journal-replay` this way before
 letting traffic in, so deletions made after the backup are applied again.
+Privacy changes and page moves made after the backup aren't replayed, so
+also apply the block from "Blocking `/mcp`" and check it before letting
+traffic in. Then tell account owners the backup's time, and ask them to
+re-check which notebooks are private, to move again any pages they moved
+after it, and to revoke again any API key they revoked after it. Remove the
+block once they have (ADR 0017).
+
+## Blocking `/mcp`
+
+A restore, or a rollback past private notebooks, can leave private text
+readable by agents (ADR 0017). Block the MCP server while the web app and
+the apps stay up, so owners can still sign in and re-check their notebooks.
+
+The chart's Ingress sends every path on the host to the API, and no value
+leaves `/mcp` out, so the block is a separate Ingress applied with
+`kubectl`, outside the release. Give it the chart Ingress's host, class and
+`tls` (on controllers that route HTTPS separately, an Ingress without `tls`
+doesn't apply to HTTPS), and one `Exact` path, `/mcp`, which takes
+precedence over the chart's `/` prefix. The MCP server answers only that
+exact path; its two OAuth metadata paths stay open and return no note
+content.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: { name: libarrie-mcp-block, namespace: libarrie }
+spec:
+  ingressClassName: nginx  # the chart Ingress's class, if it has one
+  tls:
+    - hosts: [notes.example.com]
+      secretName: libarrie-tls  # the chart Ingress's TLS secret
+  rules:
+    - host: notes.example.com
+      http:
+        paths:
+          - path: /mcp
+            pathType: Exact
+            backend:
+              service: { name: libarrie-mcp-block, port: { number: 8080 } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: libarrie-mcp-block, namespace: libarrie }
+spec:
+  selector: { app: libarrie-mcp-block }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: libarrie-mcp-block, namespace: libarrie }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: libarrie-mcp-block } }
+  template:
+    metadata: { labels: { app: libarrie-mcp-block } }
+    spec:
+      containers:
+        - name: block
+          image: caddy:2.10
+          command: ["caddy", "respond", "--listen", ":8080", "--status", "503", "--body", "MCP is paused."]
+          ports: [{ containerPort: 8080 }]
+```
+
+Check it before the restored database or the older release can answer:
+`curl -i https://notes.example.com/mcp` must return 503 with the body
+`MCP is paused.`. A 401 with a `WWW-Authenticate` header comes from the MCP
+server, so the block didn't take. A bare 503 can be the controller's own
+answer while the API has no ready pods, so it doesn't show the block.
+
+With `ingress.enabled: false`, block the path in your own ingress instead.
+Turning the chart's Ingress off would block MCP too, but it also takes down
+the web app and the apps. To unblock, delete the Ingress, Service and
+Deployment.
 
 ## Uninstall
 
