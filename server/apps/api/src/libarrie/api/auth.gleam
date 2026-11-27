@@ -2,6 +2,7 @@
 ////
 //// `/v1` accepts two mutually exclusive modes:
 //// - Bearer (native clients): `Authorization: Bearer` and no session cookie.
+////   A token whose audience also lists the MCP audience is refused (ADR 0017).
 //// - Session cookie (same-origin browser): non-GET requests must carry a
 ////   matching `X-CSRF-Token` and an `Origin` equal to the web origin (or, if
 ////   absent, `Sec-Fetch-Site: same-origin`).
@@ -11,6 +12,7 @@
 import gleam/bit_array
 import gleam/crypto
 import gleam/http/request
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
@@ -24,11 +26,33 @@ import wisp
 
 
 pub type Auth {
-  Auth(verifier: identity.Verifier, web_origin: String, internal_token: Option(String))
+  Auth(
+    verifier: identity.Verifier,
+    /// The effective MCP audience (`settings.mcp_audience`). `/v1` refuses a
+    /// bearer token whose `aud` also lists it (ADR 0017).
+    mcp_audience: String,
+    web_origin: String,
+    internal_token: Option(String),
+  )
 }
 
 fn authentication_required() -> AppError {
   error.new(401, "authentication_required", "Sign in to continue.")
+}
+
+/// The identity provider put both audiences in one token. The message names
+/// the configured values, never strings from the token.
+fn both_audiences(oidc_audience: String, mcp_audience: String) -> AppError {
+  error.new(
+    401,
+    "authentication_required",
+    "This token's audience lists both OIDC_AUDIENCE (\""
+      <> oidc_audience
+      <> "\") and the MCP audience (\""
+      <> mcp_audience
+      <> "\"). /v1 doesn't accept tokens that MCP accepts, so the identity "
+      <> "provider must not put both audiences in one token.",
+  )
 }
 
 pub fn principal(
@@ -60,7 +84,8 @@ pub fn principal(
   }
 }
 
-/// Verified bearer claims (used for explicit account creation after purge).
+/// Verified bearer claims (used for explicit account creation after purge),
+/// under the same rules as `principal`'s bearer mode.
 pub fn bearer_claims(auth: Auth, req: wisp.Request) -> Result(identity.Claims, AppError) {
   let token = case request.get_header(req, "authorization") {
     Ok(value) ->
@@ -76,11 +101,7 @@ pub fn bearer_claims(auth: Auth, req: wisp.Request) -> Result(identity.Claims, A
   }
   case token {
     Error(_) -> Error(authentication_required())
-    Ok(token) -> {
-      let now = timestamp.system_time() |> timestamp.to_unix_seconds_and_nanoseconds
-      identity.verify(auth.verifier, token, now.0)
-      |> result.replace_error(authentication_required())
-    }
+    Ok(token) -> verify_bearer(auth, token)
   }
 }
 
@@ -89,17 +110,31 @@ fn bearer_principal(
   auth: Auth,
   token: String,
 ) -> Result(Principal, AppError) {
+  use claims <- result.try(verify_bearer(auth, token))
+  accounts.resolve(
+    ctx,
+    claims.issuer,
+    claims.subject,
+    claims.name,
+    claims.auth_time,
+  )
+}
+
+/// A token that fails verification gets the generic error. A verified token
+/// whose audience also lists the MCP audience would work on `/mcp` too, and
+/// `/v1` returns the text of private notebooks, so it is refused (ADR 0017).
+fn verify_bearer(
+  auth: Auth,
+  token: String,
+) -> Result(identity.Claims, AppError) {
   let now = timestamp.system_time() |> timestamp.to_unix_seconds_and_nanoseconds
-  case identity.verify(auth.verifier, token, now.0) {
-    Error(_) -> Error(authentication_required())
-    Ok(claims) ->
-      accounts.resolve(
-        ctx,
-        claims.issuer,
-        claims.subject,
-        claims.name,
-        claims.auth_time,
-      )
+  use claims <- result.try(
+    identity.verify(auth.verifier, token, now.0)
+    |> result.replace_error(authentication_required()),
+  )
+  case list.contains(claims.audience, auth.mcp_audience) {
+    True -> Error(both_audiences(auth.verifier.audience, auth.mcp_audience))
+    False -> Ok(claims)
   }
 }
 

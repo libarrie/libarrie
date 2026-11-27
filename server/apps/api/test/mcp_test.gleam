@@ -19,6 +19,7 @@ import gleam_mcp/client/capabilities
 import gleam_mcp/client/transport
 import gleam_mcp/codec_value
 import gleam_mcp/jsonrpc.{type Value, VInt, VString}
+import libarrie/api/auth
 import libarrie/api/router
 import libarrie/domain/accounts
 import libarrie/domain/api_keys
@@ -439,6 +440,205 @@ pub fn mcp_tokens_do_not_work_on_the_api_test() {
   let assert [401, 401] = reads(mint(settings.mcp_audience(config)))
 }
 
+/// A development-issuer token whose `aud` is a list.
+fn mint_token(
+  secret: String,
+  issuer: String,
+  audiences: List(String),
+  subject: String,
+  expires_at: Int,
+) -> String {
+  identity.sign_hs256(secret, [
+    #("iss", json.string(issuer)),
+    #("sub", json.string(subject)),
+    #("aud", json.array(audiences, json.string)),
+    #("exp", json.int(expires_at)),
+  ])
+}
+
+/// A token whose audience lists both would work on `/mcp` too, so every
+/// `/v1` bearer path refuses it, naming both audiences (ADR 0017).
+pub fn tokens_with_both_audiences_do_not_work_on_the_api_test() {
+  let app = support.app()
+  let ada = person_with_notes(app)
+  let assert Ok(config) = settings.load()
+  let oidc = config.oidc_audience
+  let mcp = settings.mcp_audience(config)
+  let token_for = fn(subject, audiences) {
+    mint_token(
+      support.dev_secret,
+      config.oidc_issuer,
+      audiences,
+      subject,
+      support.now_seconds() + 3600,
+    )
+  }
+  let fetch = fn(path, token) {
+    support.call(app, http.Get, path, token, None, [])
+  }
+  let paths = [
+    "/v1/notebooks",
+    "/v1/pages/" <> ada.page_id,
+    "/v1/me",
+    "/img/" <> support.uuid() <> "/thumb",
+  ]
+  let names_both = fn(message) {
+    string.contains(message, "\"" <> oidc <> "\"")
+    && string.contains(message, "\"" <> mcp <> "\"")
+  }
+  // Either order, and with a third audience, as providers often add one.
+  list.each(
+    [[oidc, mcp], [mcp, oidc], [oidc, mcp, "https://other.example"]],
+    fn(audiences) {
+      let token = token_for(ada.subject, audiences)
+      list.each(paths, fn(path) {
+        let reply = fetch(path, token)
+        let assert 401 = reply.status
+        let assert "authentication_required" =
+          support.str(reply, ["error", "code"])
+        let message = support.str(reply, ["error", "message"])
+        let assert True = names_both(message)
+        // Only configured values, never strings from the token.
+        let assert False = string.contains(message, "other.example")
+      })
+    },
+  )
+  // Ada's API token still works, so the image's 401 came from
+  // authentication and not from the lookup.
+  let api = token_for(ada.subject, [oidc])
+  let assert [200, 200, 200, 404] =
+    list.map(paths, fn(path) { fetch(path, api).status })
+  // Account creation after a purge refuses it too. The router can't get
+  // there with such a token, because `principal` refuses it first.
+  let claims = fn(token) {
+    simulate.request(http.Post, "/v1/accounts")
+    |> simulate.header("authorization", "Bearer " <> token)
+    |> auth.bearer_claims(app.auth, _)
+  }
+  let assert Error(refused) = claims(token_for(ada.subject, [oidc, mcp]))
+  let assert 401 = refused.status
+  let assert "authentication_required" = refused.code
+  let assert True = names_both(refused.message)
+  let assert Ok(accepted) = claims(api)
+  let assert True = accepted.subject == ada.subject
+  // A refused token provisions nothing.
+  let subject = "mcp-" <> support.random_id()
+  let assert 401 = fetch("/v1/me", token_for(subject, [oidc, mcp])).status
+  let assert 0 =
+    support.sql_int(
+      app,
+      "select count(*)::int from identities where subject = $1",
+      [subject],
+    )
+}
+
+/// `/mcp` still accepts such a token. It is served with the `/v1` verifier
+/// that `serve` hands to `mcp_config`, so a refusal carried by that verifier
+/// would fail here.
+pub fn tokens_with_both_audiences_still_work_on_mcp_test() {
+  let app = support.app()
+  let ada = person_with_notes(app)
+  let assert Ok(config) = settings.load()
+  // With the development issuer's secret set, this is the HS256 verifier.
+  let assert Ok(verifier) = libarrie_api.verifier(config)
+  // MCP OAuth is on only without the development issuer.
+  let cfg = settings.Settings(..config, development_issuer_secret: None)
+  let url =
+    serve(
+      app,
+      libarrie_api.mcp_config(
+        cfg,
+        app.ctx,
+        verifier,
+        "test-secret-key-base-0123456789abcdef-0123456789abcdef",
+      ),
+    )
+  let token =
+    mint_token(
+      support.dev_secret,
+      config.oidc_issuer,
+      [config.oidc_audience, settings.mcp_audience(cfg)],
+      ada.subject,
+      support.now_seconds() + 3600,
+    )
+  let c = connect(url, token, None)
+  let assert #(me, False) = call(c, "get_me", [])
+  let assert True = string.contains(me, ada.user_id)
+  // One token, two outcomes.
+  let assert 401 =
+    support.call(app, http.Get, "/v1/notebooks", token, None, []).status
+}
+
+/// Only the MCP audience itself, compared exactly, makes `/v1` refuse a
+/// token.
+pub fn api_tokens_with_other_audiences_still_work_test() {
+  let app = support.app()
+  let ada = person_with_notes(app)
+  let assert Ok(config) = settings.load()
+  let oidc = config.oidc_audience
+  let mcp = settings.mcp_audience(config)
+  list.each(
+    [
+      [oidc],
+      [oidc, "https://other.example"],
+      // No normalization: a trailing slash or a change of case is another
+      // audience.
+      [oidc, mcp <> "/"],
+      [oidc, string.uppercase(mcp)],
+    ],
+    fn(audiences) {
+      let token =
+        mint_token(
+          support.dev_secret,
+          config.oidc_issuer,
+          audiences,
+          ada.subject,
+          support.now_seconds() + 3600,
+        )
+      let read = fn(path) {
+        support.call(app, http.Get, path, token, None, []).status
+      }
+      let assert [200, 200] =
+        list.map(["/v1/notebooks", "/v1/pages/" <> ada.page_id], read)
+    },
+  )
+}
+
+/// A token that fails verification gets the generic error, which names no
+/// audience, whatever its `aud` lists.
+pub fn failed_tokens_with_both_audiences_get_the_generic_error_test() {
+  let app = support.app()
+  let ada = person_with_notes(app)
+  let assert Ok(config) = settings.load()
+  let oidc = config.oidc_audience
+  let mcp = settings.mcp_audience(config)
+  let secret = support.dev_secret
+  let issuer = config.oidc_issuer
+  let now = support.now_seconds()
+  let sign = fn(secret, issuer, audiences, expires_at) {
+    mint_token(secret, issuer, audiences, ada.subject, expires_at)
+  }
+  list.each(
+    [
+      sign("wrong-secret", issuer, [oidc, mcp], now + 3600),
+      // Expired: the test verifier allows no leeway.
+      sign(secret, issuer, [oidc, mcp], now - 60),
+      sign(secret, "https://other-issuer.example", [oidc, mcp], now + 3600),
+      sign(secret, issuer, [mcp], now + 3600),
+      sign(secret, issuer, [mcp, "https://other.example"], now + 3600),
+    ],
+    fn(token) {
+      let reply = support.call(app, http.Get, "/v1/notebooks", token, None, [])
+      let assert 401 = reply.status
+      let assert "authentication_required" =
+        support.str(reply, ["error", "code"])
+      let assert "Sign in to continue." =
+        support.str(reply, ["error", "message"])
+      let assert False = string.contains(reply.body, mcp)
+    },
+  )
+}
+
 /// The startup check compares the audience the MCP verifier really uses.
 pub fn mcp_config_takes_its_audience_from_settings_test() {
   let app = support.app()
@@ -482,6 +682,37 @@ pub fn api_verifier_checks_the_oidc_audience_test() {
     )
   let assert Ok(verifier) = libarrie_api.verifier(cfg)
   let assert True = verifier.audience == cfg.oidc_audience
+}
+
+/// And `/v1` refuses the audience the MCP verifier uses, with either
+/// identity provider. Taking the MCP resource URL, or setting the audience
+/// only for a real provider, would fail.
+pub fn api_auth_takes_the_mcp_audience_from_settings_test() {
+  let assert Ok(config) = settings.load()
+  let verifier =
+    identity.Verifier(
+      issuer: config.oidc_issuer,
+      audience: config.oidc_audience,
+      keys: identity.Hs256Secret(support.dev_secret),
+      leeway_seconds: 0,
+    )
+  list.each([None, Some("https://mcp.example")], fn(audience) {
+    list.each([None, Some(support.dev_secret)], fn(secret) {
+      let cfg =
+        settings.Settings(
+          ..config,
+          development_issuer_secret: secret,
+          mcp_oauth_audience: audience,
+          web_origin: "https://notes.example",
+          internal_api_token: Some(support.internal_token),
+        )
+      let built = libarrie_api.api_auth(cfg, verifier)
+      let assert True = built.mcp_audience == settings.mcp_audience(cfg)
+      let assert True = built.verifier.audience == cfg.oidc_audience
+      let assert True = built.web_origin == cfg.web_origin
+      let assert True = built.internal_token == cfg.internal_api_token
+    })
+  })
 }
 
 /// Each search result's notebook ID, notebook name, page, snippet and keys.

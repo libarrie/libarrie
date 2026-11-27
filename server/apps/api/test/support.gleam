@@ -49,8 +49,7 @@ pub fn app() -> router.App {
   router.App(
     ctx:,
     auth: auth.Auth(
-      verifier:,
-      web_origin: config.web_origin,
+      ..libarrie_api.api_auth(config, verifier),
       internal_token: Some(internal_token),
     ),
     web:,

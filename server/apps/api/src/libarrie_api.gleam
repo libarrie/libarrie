@@ -247,6 +247,18 @@ pub fn verifier(config: Settings) -> Result(identity.Verifier, String) {
   ))
 }
 
+/// `/v1` request authentication. Bearer tokens must carry `OIDC_AUDIENCE`
+/// and must not also carry the MCP audience, with any identity provider
+/// (ADR 0017).
+pub fn api_auth(config: Settings, verifier: identity.Verifier) -> auth.Auth {
+  auth.Auth(
+    verifier:,
+    mcp_audience: settings.mcp_audience(config),
+    web_origin: config.web_origin,
+    internal_token: config.internal_api_token,
+  )
+}
+
 /// Web UI configuration. With the development issuer the endpoints are the
 /// built-in `/dev-issuer` routes; otherwise they come from configuration or
 /// OIDC discovery (`<issuer>/.well-known/openid-configuration`).
@@ -428,15 +440,7 @@ fn serve(config: Settings, extensions: List(web_config.Extension)) -> Nil {
         }
       }
       let app =
-        router.App(
-          ctx:,
-          auth: auth.Auth(
-            verifier:,
-            web_origin: config.web_origin,
-            internal_token: config.internal_api_token,
-          ),
-          web: web_config,
-        )
+        router.App(ctx:, auth: api_auth(config, verifier), web: web_config)
       let assert Ok(_) =
         http_handler(
           app,
