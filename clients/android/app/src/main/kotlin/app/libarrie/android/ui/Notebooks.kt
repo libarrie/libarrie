@@ -113,9 +113,18 @@ class NotebooksViewModel(private val container: AppContainer) : ViewModel() {
 
     suspend fun save(editor: NotebookEditor): Boolean {
         if (!saveNotebook(container, editor)) return false
-        // A successful load clears the message, so show the notice after it.
-        load().join()
-        editor.notice?.let { message = StatusInfo.Kind.Warning to it }
+        // Return without suspending, so the dialog closes at once: the save has
+        // turned Create and Save back on, and a second tap would submit again.
+        val reload = load()
+        // A successful load clears the message, so the notice waits for this
+        // one. It runs in this model's scope, which closing the dialog or
+        // recreating the activity doesn't cancel.
+        editor.notice?.let { notice ->
+            viewModelScope.launch {
+                reload.join()
+                message = StatusInfo.Kind.Warning to notice
+            }
+        }
         return true
     }
 }
