@@ -71,7 +71,7 @@ import kotlinx.coroutines.launch
  * notebook being edited and builds the request a save sends.
  */
 class NotebookEditor(val editing: Notebook?) {
-    var draft by mutableStateOf(NotebookDraft.of(editing))
+    private var draft by mutableStateOf(NotebookDraft.of(editing))
     var name: String
         get() = draft.name
         set(value) { draft = draft.copy(name = value) }
