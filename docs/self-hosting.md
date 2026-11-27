@@ -70,8 +70,13 @@ Register these in the provider:
    provider must issue JWT access tokens whose audience is
    `https://notes.example.com/mcp`, and let MCP clients register. That
    audience (or `MCP_OAUTH_AUDIENCE`, if you set it) must differ from
-   `OIDC_AUDIENCE`; Libarrie refuses to start otherwise. Most people use an
-   API key instead (Settings → API keys), which needs nothing here.
+   `OIDC_AUDIENCE`; Libarrie refuses to start otherwise. The provider must
+   not put both audiences in one token: the API refuses such a token, so an
+   app that holds one can't sign in. Where the provider allows it, don't
+   let MCP clients get tokens for `OIDC_AUDIENCE` either. The API accepts a
+   token whose only audience is `OIDC_AUDIENCE`, whichever client it was
+   issued to (ADR 0017, (d)). Most people use an API key instead
+   (Settings → API keys), which needs nothing here.
 
 `OIDC_ISSUER` is the provider's issuer URL, exactly as it appears in its
 tokens. `OIDC_JWKS_URL` is its key set, listed as `jwks_uri` in
@@ -219,4 +224,7 @@ across when you upgrade: see `docs/runbooks/seaweedfs-to-rustfs.md`.
   `docker compose run --rm api storage-check`.
 - **Sign-in fails:** confirm the redirect URI matches exactly,
   `OIDC_ISSUER` matches the `iss` claim, and the machine can reach
-  `OIDC_JWKS_URL`.
+  `OIDC_JWKS_URL`. If the iOS or Android app can't sign in after an
+  upgrade, check whether the provider puts both `OIDC_AUDIENCE` and the MCP
+  audience in the apps' access tokens. `/v1/me` answers such a token with a
+  401 whose message names both.

@@ -136,12 +136,25 @@ match.
   0012. Its upgrade now stops at the migrate step, before the schema
   changes, with a message that names both variables. The fix is to give
   MCP its own audience.
-- **Remaining caveat:** an identity provider that puts both audiences in
-  one token would still let that token reach `/v1`. Rejecting such tokens
-  on `/v1` would affect only the native apps, the only clients that send
-  bearer tokens there, and only in that configuration. That's a follow-up.
-  It should reject such a token with an error that names both audiences,
-  rather than log a warning.
+- **Tokens with both audiences:** the caveat that an identity provider
+  could put both audiences in one token, and so let it reach `/v1`, is
+  closed (libarrie#3). `/v1` refuses a bearer token whose `aud` lists the
+  effective MCP audience, whatever else it lists. The refusal is a 401
+  `authentication_required` whose message names both values. So no
+  identity-provider access token works on both `/mcp` and `/v1`.
+  - The check runs only after the signature, issuer, audience and expiry
+    checks pass. A token that fails one of them still gets the generic
+    "Sign in to continue.", which names no audience.
+  - It compares exactly, and applies with the development issuer too. It
+    covers every `/v1` route, `/img` and `POST /v1/accounts` after a
+    purge. `/mcp` still accepts such a token, and cookie sessions are
+    unchanged.
+  - The native apps, the only clients that send bearer tokens to `/v1`,
+    show this 401 as a failed sign-in. Where the provider puts both
+    audiences in their tokens, they can't sign in until it's fixed.
+  - What stays open is (d): a token whose only audience is
+    `OIDC_AUDIENCE` still works on `/v1`, whichever client of the provider
+    it was issued to.
 
 ## Rules for future MCP tools
 
@@ -282,7 +295,9 @@ every result; it is illustrative.
   the same index generation with no new jobs.
 - **MCP:** `mcp_test` covers `search` and `get_text` by notebook name and
   ID, toggled both ways, the re-checked text read, the descriptions and
-  instructions, and the audience separation.
+  instructions, and the audience separation. That includes a token whose
+  `aud` lists both audiences: `/v1` refuses it and names both, and `/mcp`
+  still accepts it.
 - **Web:** the form and search tests, the accessibility snapshots (a
   private search hit, and the notebook settings opened), and the browser
   test, which makes a notebook private, searches it and follows the hit to
