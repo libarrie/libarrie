@@ -173,15 +173,22 @@ pub fn mcp_audience_must_differ_from_the_api_audience_test() {
 /// caller's configuration, so exported variables can't change the outcome.
 pub fn settings_load_refuses_equal_audiences_test() {
   let assert Ok(config) = settings.load()
-  // Load with one variable changed, then restore it before any assertion.
+  // Load with one variable changed, then restore every change before any
+  // assertion. OIDC_CLIENT_ID, which test.sh leaves unset, defaults to
+  // OIDC_AUDIENCE. A value of its own makes a check that compared the
+  // client ID in place of OIDC_AUDIENCE fail here.
   let load_with = fn(name, value) {
-    let prior = envoy.get(name)
-    envoy.set(name, value)
+    let changes = [#("OIDC_CLIENT_ID", "libarrie-web"), #(name, value)]
+    let priors =
+      list.map(changes, fn(change) { #(change.0, envoy.get(change.0)) })
+    list.each(changes, fn(change) { envoy.set(change.0, change.1) })
     let loaded = settings.load()
-    case prior {
-      Ok(prior) -> envoy.set(name, prior)
-      Error(Nil) -> envoy.unset(name)
-    }
+    list.each(priors, fn(prior) {
+      case prior {
+        #(changed, Ok(value)) -> envoy.set(changed, value)
+        #(changed, Error(Nil)) -> envoy.unset(changed)
+      }
+    })
     loaded
   }
   let names_both = fn(loaded) {
@@ -194,5 +201,8 @@ pub fn settings_load_refuses_equal_audiences_test() {
   }
   let assert True = names_both(load_with("MCP_OAUTH_AUDIENCE", config.oidc_audience))
   let assert True = names_both(load_with("OIDC_AUDIENCE", settings.mcp_audience(config)))
-  let assert Ok(_) = load_with("OIDC_AUDIENCE", settings.mcp_audience(config) <> "/")
+  let assert Ok(loaded) =
+    load_with("OIDC_AUDIENCE", settings.mcp_audience(config) <> "/")
+  // The loads really had a client ID that differs from the API audience.
+  let assert True = loaded.oidc_client_id != loaded.oidc_audience
 }
