@@ -41,6 +41,15 @@ fn open_settings(html: String) -> String {
   opened
 }
 
+/// The search screen, checked to show the private hit's note next to the
+/// other hit's snippet, so the audit covers both.
+fn shows_both_hits(html: String) -> String {
+  // A setup or markup change must not silently drop either from the audit.
+  let assert True = string.contains(html, "Private notebook. The matching text")
+  let assert True = string.contains(html, "class=\"snippet\"")
+  html
+}
+
 pub fn accessibility_snapshots_test() {
   case envoy.get("LIBARRIE_A11Y_SNAPSHOTS") {
     Error(_) -> Nil
@@ -159,6 +168,7 @@ pub fn accessibility_snapshots_test() {
             }
           let html = case name {
             "notebook-settings" -> open_settings(render(app, method, path, cookie, csrf, form))
+            "search" -> shows_both_hits(render(app, method, path, cookie, csrf, form))
             _ -> render(app, method, path, cookie, csrf, form)
           }
           let assert True = string.starts_with(html, "<!doctype html>")
